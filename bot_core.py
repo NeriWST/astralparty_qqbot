@@ -186,7 +186,7 @@ class AccountManager:
             return self._refresh_profile(s), ''
         tok = self._load_token(uid)
         if not tok or not tok.get('accessToken'):
-            return None, '还没登录。私聊我发：/登录 你的手机号，再发：/验证码 6位数字。'
+            return None, '还没登录。群里 @我 发 /登录 获取网页登录链接（或私聊 /登录 手机号）。'
         try:
             sid, resp = token_login(tok['accessToken'], tok.get('tel', ''))
             self._save_token(uid, resp, tok.get('tel', ''))
@@ -309,6 +309,15 @@ class AccountManager:
     @synchronized
     def resolve_member(self, member_openid):
         return self.bindings.get(member_openid)
+
+    @synchronized
+    def unbind_member(self, member_openid):
+        """解除群身份绑定（/解绑）：删除 member->user 映射；user 名下的票保留，可重新绑定找回。"""
+        if member_openid not in self.bindings:
+            return False
+        self.bindings.pop(member_openid, None)
+        self._save_bindings()
+        return True
 
     # ── 战绩历史存档（/我的 卡片"变化"对比用）────────────────
     def load_stats_history(self, uid, limit=20):

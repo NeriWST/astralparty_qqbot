@@ -7,8 +7,10 @@ fetch_replay_stats 后 exec 执行，保证与 AstralParty_Dex 原版 100% 一�
 import json
 import re
 import time
+import threading
 import urllib.request
 from pathlib import Path
+from functools import wraps
 
 from bot_core import HERO, MODE, format_profile
 
@@ -53,34 +55,47 @@ def _load_original():
 
 
 _NS = None
+_original_lock = threading.Lock()
+_replay_locks = [threading.Lock() for _ in range(64)]
 
 
 def original():
     global _NS
-    if _NS is None:
-        _NS = _load_original()
+    with _original_lock:
+        if _NS is None:
+            _NS = _load_original()
     return _NS
 
 
 def fetch_replay_stats(rid):
-    return original()['fetch_replay_stats'](rid)
+    # 固定数量分片锁，避免同一回放同时下载/写缓存，也避免锁表无限增长。
+    with _replay_locks[hash(str(rid)) % len(_replay_locks)]:
+        return original()['fetch_replay_stats'](rid)
 
 
 # -- /查：借任一已登录会话代查公开档案 -------------------------------
+def manager_locked(method):
+    @wraps(method)
+    def wrapped(mgr, *args, **kwargs):
+        with mgr._lock:
+            return method(mgr, *args, **kwargs)
+    return wrapped
+
+
 def any_session(mgr, prefer_uid=None):
     """挑一个在线游戏会话：优先查询专用小号，其次 prefer_uid 本人。"""
     get_su = getattr(mgr, 'service_uid', None)
     su = get_su() if get_su else ''
     if su:
         s = mgr.sessions.get(su)
-        if s and s.get('client'):
+        if s and s.get('client') and s['client'].sock:
             return su, s
     if prefer_uid:
         s = mgr.sessions.get(prefer_uid)
-        if s and s.get('client'):
+        if s and s.get('client') and s['client'].sock:
             return prefer_uid, s
     for uid, s in mgr.sessions.items():
-        if s and s.get('client'):
+        if s and s.get('client') and s['client'].sock:
             return uid, s
     return None, None
 
@@ -96,6 +111,7 @@ def _drop_dead_session(mgr, owner):
         pass
 
 
+@manager_locked
 def query_uid(mgr, uid, prefer_uid=None):
     """好友查询路径：5263 GetPlayerSimple(FriendInfo) + 5155 GetPlayerFightRecord。
     只用基础协议，不碰 5153 个人信息全量查询；借任一在线会话（优先服务号），查的人无需登录。"""
@@ -194,6 +210,7 @@ def _room_hands(res):
     return out
 
 
+@manager_locked
 def watch_hands(mgr, watch_code):
     """观战号加房间拿手牌快照即退出。借在线会话（优先 service.json 指定的观战号）。"""
     owner, s = any_session(mgr, None)

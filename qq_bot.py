@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """QQ 接入层。私聊登录，群聊查战绩；/回放 回放号免登录战报。"""
 import os, re
+import asyncio
+import threading
+import uuid
+from dataclasses import dataclass
 
 try:
     import qqbot
@@ -10,8 +14,8 @@ except ImportError:
 from bot_core import AccountManager, format_profile
 import bot_ext
 
-APP_ID = os.environ['QQ_APPID']
-SECRET = os.environ['QQ_SECRET']
+APP_ID = os.environ.get('QQ_APPID', '')
+SECRET = os.environ.get('QQ_SECRET', '')
 
 HELP_TEXT = (
     '【星趴战绩机器人 · 使用帮助】\n'
@@ -62,39 +66,46 @@ def _start_card_server():
     threading.Thread(target=run, daemon=True).start()
 
 
+_card_lock = threading.Lock()
+
+
+@dataclass(frozen=True)
+class Reply:
+    text: str
+    image: bytes | None = None
+
+
 def save_card(png: bytes) -> str:
-    """保存卡片并返回公网 URL（文件名带时间戳，避免 QQ 缓存旧图）"""
-    import time as _time
-    os.makedirs(CARD_DIR, exist_ok=True)
-    name = 'card_%d.png' % int(_time.time() * 1000)
-    with open(os.path.join(CARD_DIR, name), 'wb') as f:
-        f.write(png)
-    try:
-        files = sorted(os.listdir(CARD_DIR))
-        for old_f in files[:-50]:
-            os.remove(os.path.join(CARD_DIR, old_f))
-    except Exception:
-        pass
+    """唯一文件名与串行清理，避免并发请求覆盖图片。"""
+    with _card_lock:
+        os.makedirs(CARD_DIR, exist_ok=True)
+        name = 'card_' + uuid.uuid4().hex + '.png'
+        path = os.path.join(CARD_DIR, name)
+        with open(path, 'wb') as f:
+            f.write(png)
+        files = sorted((os.path.join(CARD_DIR, n) for n in os.listdir(CARD_DIR)
+                        if n.startswith('card_') and n.endswith('.png')),
+                       key=os.path.getmtime)
+        for old in files[:-50]:
+            if old != path:
+                try:
+                    os.remove(old)
+                except OSError:
+                    pass
     return CARD_BASE.rstrip('/') + '/' + name
-
-
-IMG_PAYLOAD = [None]   # /我的 时暂存卡片 PNG bytes（list 技巧免 global）
-
-
-def _attach_card(p):
-    try:
-        IMG_PAYLOAD[0] = bot_ext.card_from_profile(p)
-    except Exception as e:
-        print('[card] 卡片生成失败（回退纯文字）:', e)
-        IMG_PAYLOAD[0] = None
 
 
 def profile_of(qq_uid):
     p, err = mgr.get_profile(qq_uid)
     if p is None:
-        return err
-    _attach_card(p)
-    return format_profile(p)
+        return Reply(err)
+    image = None
+    if CARD_BASE:
+        try:
+            image = bot_ext.card_from_profile(p)
+        except Exception as e:
+            print('[card] 卡片生成失败（回退纯文字）:', type(e).__name__)
+    return Reply(format_profile(p), image)
 
 
 
@@ -127,34 +138,34 @@ def do_replay(arg):
     return bot_ext.format_replay_stats(m.group(1))
 
 
-def handle_private(text):
+def handle_private(text, user_openid):
     """私聊指令（user_openid 标识身份）"""
     text = text.strip()
     if text in ('/帮助', '帮助', '/help', 'help'):
         return HELP_TEXT
     if text in ('/我的', '我的'):
-        return profile_of(USER)
+        return profile_of(user_openid)
     m = re.match(r'^/登录\s+(\d{11})$', text)
     if m:
         try:
-            return mgr.send_code(USER, m.group(1))
+            return mgr.send_code(user_openid, m.group(1))
         except Exception as e:
             return '发送验证码失败：%s' % e
     m = re.match(r'^/验证码\s+(\d{4,8})$', text)
     if m:
         try:
-            return mgr.login_with_code(USER, m.group(1))
+            return mgr.login_with_code(user_openid, m.group(1))
         except Exception as e:
             return '登录失败：%s' % e
     m = re.match(r'^/绑定\s+(\d{6})$', text)
     if m:
-        return mgr.bind(USER, m.group(1))
+        return mgr.bind(user_openid, m.group(1))
     m = re.match(r'^/回放\s+(\S+)$', text)
     if m:
         return do_replay(m.group(1))
     m = re.match(r'^/查\s+(\S+)$', text)
     if m:
-        return do_query(m.group(1), USER)
+        return do_query(m.group(1), user_openid)
     m = re.match(r'^/手牌\s+(\S+)$', text)
     if m:
         return do_watch(m.group(1))
@@ -187,56 +198,77 @@ def handle_group(text, member_openid):
 
 
 class MyClient(qqbot.Client):
+    async def _dispatch(self, handler, *args):
+        # 不排无限队列：所有 worker 忙时立即回复，避免积压过期的被动回复。
+        active = getattr(self, '_active_commands', 0)
+        if active >= 4:
+            return Reply('当前查询较多，请稍后再试。')
+        self._active_commands = active + 1
+        task = asyncio.create_task(asyncio.to_thread(handler, *args))
+
+        def finished(done):
+            self._active_commands -= 1
+            if not done.cancelled():
+                done.exception()  # 回调取消后仍消费后台异常。
+
+        task.add_done_callback(finished)
+        try:
+            result = await asyncio.shield(task)
+            return result if isinstance(result, Reply) else Reply(result)
+        except Exception as e:
+            print('[command error]', type(e).__name__)
+            return Reply('处理失败，请稍后重试。')
+
     async def on_ready(self):
         print('[bot] 已上线，等待消息...')
 
+    async def _reply(self, message, target, result, group=False):
+        text = result.text[:1900]
+        try:
+            if result.image and CARD_BASE:
+                try:
+                    url = await asyncio.to_thread(save_card, result.image)
+                    if group:
+                        media = await self.api.post_group_file(
+                            group_openid=target, file_type=1, url=url, srv_send_msg=False)
+                        await self.api.post_group_message(
+                            group_openid=target, msg_type=7, media=media,
+                            msg_id=message.id, msg_seq=1)
+                    else:
+                        media = await self.api.post_c2c_file(
+                            openid=target, file_type=1, url=url, srv_send_msg=False)
+                        await self.api.post_c2c_message(
+                            openid=target, msg_type=7, media=media,
+                            msg_id=message.id, msg_seq=1)
+                    return
+                except Exception as e:
+                    print('[reply error] 图片发送失败，回退纯文字:', type(e).__name__)
+            await message.reply(content=text)
+        except Exception as e:
+            print('[reply error]', type(e).__name__)
+
     async def on_group_at_message_create(self, message):
         uid = str(getattr(message.author, 'member_openid', '') or '')
-        print('[group]', uid, message.content)
+        gid = str(getattr(message, 'group_openid', '') or '')
+        if not uid or not gid:
+            return
+        print('[group] 收到消息')
         text = re.sub(r'<@!\d+>', '', message.content).strip()
-        reply_text = handle_group(text, uid)[:1900]
-        img = IMG_PAYLOAD[0]; IMG_PAYLOAD[0] = None   # 必须在 handle 之后取（图是当前这条消息生成的）
-        gid = str(getattr(message, 'group_openid', '') or '')   # 群的 openid，不是发言人的
-        try:
-            if img:
-                try:
-                    url = save_card(img)
-                    media = await self.api.post_group_file(group_openid=gid, file_type=1, url=url, srv_send_msg=False)
-                    await self.api.post_group_message(group_openid=gid, msg_type=7, media=media,
-                                                      msg_id=message.id, msg_seq=1)
-                    print('[card] 群图片已发送:', url)
-                except Exception as e:
-                    print('[reply error] 图片发送失败，回退纯文字:', e)
-                    await message.reply(content=reply_text)
-            else:
-                await message.reply(content=reply_text)
-        except Exception as e:
-            print('[reply error]', e)
+        result = await self._dispatch(handle_group, text, uid)
+        await self._reply(message, gid, result, group=True)
 
     async def on_c2c_message_create(self, message):
-        global USER
-        USER = str(getattr(message.author, 'user_openid', '') or '')
-        print('[c2c]', USER, message.content)
-        reply_text = handle_private(message.content.strip())[:1900]
-        img = IMG_PAYLOAD[0]; IMG_PAYLOAD[0] = None   # 必须在 handle 之后取
-        try:
-            if img:
-                try:
-                    url = save_card(img)
-                    media = await self.api.post_c2c_file(openid=USER, file_type=1, url=url, srv_send_msg=False)
-                    await self.api.post_c2c_message(openid=USER, msg_type=7, media=media,
-                                                    msg_id=message.id, msg_seq=1)
-                    print('[card] 私聊图片已发送:', url)
-                except Exception as e:
-                    print('[reply error] 图片发送失败，回退纯文字:', e)
-                    await message.reply(content=reply_text)
-            else:
-                await message.reply(content=reply_text)
-        except Exception as e:
-            print('[reply error]', e)
+        uid = str(getattr(message.author, 'user_openid', '') or '')
+        if not uid:
+            return
+        print('[c2c] 收到消息')
+        result = await self._dispatch(handle_private, message.content.strip(), uid)
+        await self._reply(message, uid, result)
 
 
 if __name__ == '__main__':
+    if not APP_ID or not SECRET:
+        raise SystemExit('请设置 QQ_APPID 和 QQ_SECRET')
     _start_card_server()
     intents = qqbot.Intents(public_messages=True)
     client = MyClient(intents=intents)

@@ -137,44 +137,27 @@ def query_uid(mgr, uid, prefer_uid=None):
             continue
         if not int(getattr(info, 'playerId', 0) or 0):
             return {'ok': False, 'msg': '这个 UID 在国服务器查不到 —— 注意别和 16 位回放号输混。'}
+        records_error = False
         try:
             fr = c.get_fight_records(uid_i, index=0, timeout=15.0)
             recs = list(getattr(fr, 'recordData', []) or [])
         except Exception:
             recs = []
-        return {'ok': True, 'info': info, 'records': recs}
+            records_error = True
+        return {'ok': True, 'info': info, 'records': recs, 'records_error': records_error}
     if tried and last:
         return {'ok': False, 'msg': '查询失败：' + last}
     return {'ok': False, 'msg': ('当前没有可用的查询会话（等服务号上线后即可免登录查询）。\n'
                                 '急需可查让任意群友先私聊 /登录 一次。')}
 
 
-def format_uid_profile(uid, res):
-    from collections import Counter
-    if not res.get('ok'):
-        return res.get('msg') or '查询失败'
-    info = res['info']
-    name = str(getattr(info, 'name', '') or '') or '未知昵称'
-    lv = int(getattr(info, 'lv', 0) or 0)
-    L = ['【查战绩】%s（UID %s）｜ 等级 %s%s' % (name, uid, lv or '?',
-                                            ' ｜ 在线' if getattr(info, 'isOnline', False) else '')]
-    recs = res.get('records') or []
-    if recs:
-        cnt = Counter(int(getattr(r, 'heroId', 0) or 0) for r in recs)
-        hero = HERO.get(cnt.most_common(1)[0][0], '?')
-        wins = sum(1 for r in recs if int(getattr(r, 'rank', 0) or 0) == 1)
-        L.append('常用角色：%s（近 %d 场）｜ 近期胜率 %d%%' % (hero, len(recs),
-                                                       round(100.0 * wins / len(recs))))
-        L.append('')
-        L.append('近期战绩：')
-        for r in recs[:10]:
-            L.append('- [%s] %s 第%d名' % (MODE.get(int(getattr(r, 'mapType', 0) or 0), '?'),
-                                       HERO.get(int(getattr(r, 'heroId', 0) or 0), '?'),
-                                       int(getattr(r, 'rank', 0) or 0) or 4))
-    else:
-        L.append('近期无对局记录')
-    return '\n'.join(L)
-
+def format_uid_profile(uid, result):
+    """兼容旧调用方，文字统计仍走统一报表。"""
+    from stats_report import build_report, format_report
+    if not result.get('ok'):
+        return result.get('msg') or '查询失败'
+    profile = public_profile(uid, result)
+    return format_report(build_report(profile, profile['recent']))
 
 
 # -- /回放：免登录，直连回放服务器 -----------------------------------
@@ -250,39 +233,48 @@ def watch_hands(mgr, watch_code):
     return {'ok': True, 'room_id': room_id, 'players': data}
 
 
-def card_from_profile(prof):
-    """用 /我的 档案生成战绩卡片 PNG bytes。
-    近10场逐场伤害/转账通过回放号解析补齐（并行拉取，已缓存的秒回，失败显示 -）。"""
-    import bot_viz
-    from concurrent.futures import ThreadPoolExecutor
-    total = int(prof.get('total', 0) or 0)          # build_profile 真实字段：total/wins/winrate/praise/heroes
-    wins = int(prof.get('wins', 0) or 0)
-    rows = list(prof.get('recent', []))[:10]
-    uid_key = str(prof.get('uid', ''))
+def public_profile(uid, result):
+    """公开协议仅提供身份和近期名次；不将未提供的累计指标伪装为零。"""
+    info = result['info']
+    recent = []
+    for r in list(result.get('records') or [])[:10]:
+        recent.append({'hero': HERO.get(int(getattr(r, 'heroId', 0) or 0), '未知角色'),
+                       'rank': int(getattr(r, 'rank', 0) or 0),
+                       'mode_id': int(getattr(r, 'mapType', 0) or 0),
+                       'mode': MODE.get(int(getattr(r, 'mapType', 0) or 0), '未知模式')})
+    return {'nick': getattr(info, 'name', '') or '未知昵称', 'uid': int(uid),
+            'level': int(getattr(info, 'lv', 0) or 0),
+            'online': bool(getattr(info, 'isOnline', False)),
+            'total': None, 'wins': None, 'winrate': None, 'praise': None,
+            'heroes': None, 'recent': recent, 'source': 'public',
+            'records_error': bool(result.get('records_error'))}
 
-    def fill(r):
-        row = {'hero': r.get('hero', '?'), 'win': int(r.get('rank', 0) or 0) == 1,
-               'damage': None, 'transfer': None}
-        rid = str(r.get('replay') or '').strip()
-        if rid:
+
+def replay_rows(profile):
+    """补齐有回放号的行；回放异常只影响该行，原始档案不变。"""
+    from concurrent.futures import ThreadPoolExecutor
+    from stats_report import normalize_rows
+    rows = normalize_rows(profile.get('recent', []))
+    uid = str(profile.get('uid', ''))
+
+    def fill(row):
+        rid = str(row.get('replay') or '').strip()
+        if re.fullmatch(r'[0-9]{16}', rid):
             try:
-                stt = fetch_replay_stats(rid)
-                mine = stt.get(uid_key) or {}
-                s = mine.get('stats') or {}
-                row['damage'] = s.get('伤害')
-                row['transfer'] = s.get('转账')
-            except Exception as e:
-                print('[card] 回放 %s 解析失败: %s' % (rid, e))
+                stats = (fetch_replay_stats(rid).get(uid) or {}).get('stats') or {}
+                row['damage'], row['transfer'] = stats.get('伤害'), stats.get('转账')
+            except Exception as error:
+                print('[stats] 回放解析失败:', type(error).__name__)
         return row
 
-    with ThreadPoolExecutor(max_workers=5) as ex:
-        recent = list(ex.map(fill, rows))
-    head = {'nick': prof.get('nick', '?'), 'uid': prof.get('uid', '?'),
-            'level': prof.get('level', 0), 'online': prof.get('online', False),
-            'total': total, 'wins': wins,
-            'winrate': float(prof.get('winrate', 0) or 0),
-            'praise': int(prof.get('praise', 0) or 0), 'heroes': int(prof.get('heroes', 0) or 0)}
-    return bot_viz.render_stats_card_png(head, recent)
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        return list(pool.map(fill, rows))
+
+
+def card_from_profile(profile):
+    from stats_report import build_report
+    from bot_viz import render_report_png
+    return render_report_png(build_report(profile, replay_rows(profile)))
 
 
 def format_watch_hands(res):

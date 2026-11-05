@@ -147,10 +147,9 @@ class StorageTests(unittest.TestCase):
 
     def test_no_card_configuration_skips_expensive_render(self):
         with patch.object(bot, 'CARD_BASE', ''), patch.object(bot, 'mgr') as mgr, \
-                patch.object(bot, 'format_profile', return_value='text'), \
-                patch.object(bot.bot_ext, 'card_from_profile') as render:
+                patch('bot_viz.render_report_png') as render:
             mgr.get_profile.return_value = ({'uid': 1}, '')
-            self.assertEqual(bot.profile_of('alice'), bot.Reply('text'))
+            self.assertIsNone(bot.profile_of('alice').image)
             render.assert_not_called()
 
     def test_concurrent_card_files_are_unique(self):

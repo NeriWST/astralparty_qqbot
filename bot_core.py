@@ -79,7 +79,8 @@ def build_profile(s2c):
             continue
         recent.append({
             'time': int(getattr(r, 'time', 0) or 0),
-            'mode': MODE.get(int(getattr(r, 'mapType', getattr(mine, 'mapType', 1)) or 1), '?'),
+            'mode_id': int(getattr(r, 'mapType', getattr(mine, 'mapType', 0)) or 0),
+            'mode': MODE.get(int(getattr(r, 'mapType', getattr(mine, 'mapType', 0)) or 0), '未知模式'),
             'hero': HERO.get(int(getattr(mine, 'heroId', 0) or 0), '?'),
             'rank': int(getattr(mine, 'rank', 0) or 0),
             'replay': str(getattr(mine, 'replayId', '') or getattr(r, 'replayId', '') or ''),
@@ -182,7 +183,7 @@ class AccountManager:
         """取档案：优先复用活动会话，否则用存着的 accessToken 自动登录。"""
         s = self.sessions.get(uid)
         if s and s.get('client') and s['client'].sock:
-            return s['profile'], ''
+            return self._refresh_profile(s), ''
         tok = self._load_token(uid)
         if not tok or not tok.get('accessToken'):
             return None, '还没登录。私聊我发：/登录 你的手机号，再发：/验证码 6位数字。'
@@ -192,6 +193,38 @@ class AccountManager:
             return self._enter(uid, sid), ''
         except Exception as e:
             return None, '登录态过期了，请重新 /登录 一次。（%s）' % e
+
+    def _refresh_profile(self, session):
+        """活动会话每 30 秒刷新一次自己的展示资料，失败时明确返回缓存。"""
+        now = time.monotonic()
+        if now - session.get('refreshed_at', float('-inf')) < 30:
+            return session['profile']
+        session['refreshed_at'] = now
+        profile = dict(session['profile'])
+        try:
+            show = session['client'].get_show_player(int(profile['uid'])).showData
+            if int(show.player_id) != int(profile['uid']):
+                raise ProtocolError('返回的玩家身份不匹配')
+            if show.isShowData:
+                stats = show.statistics
+                total, wins = int(stats.fightCount), int(stats.winFightCount)
+                profile.update(total=total, wins=wins,
+                               winrate=round(100 * wins / total, 1) if total else 0,
+                               heroes=int(stats.roleCardCount), skins=int(stats.skinCount),
+                               praise=int(show.praiseNum))
+            if show.isShowFight:
+                records = list(show.record) or list(show.replayRecord)
+                records.sort(key=lambda r: -int(r.time))
+                profile['recent'] = [
+                    {'time': int(r.time), 'mode_id': int(r.mapType), 'mode': MODE.get(int(r.mapType), '未知模式'),
+                     'hero': HERO.get(int(r.heroId), '未知角色'), 'rank': int(r.rank),
+                     'replay': str(r.replayId)} for r in records[:10]]
+            profile['stale'] = not (show.isShowData and show.isShowFight)
+        except Exception as error:
+            profile['stale'] = True
+            print('[stats] 档案刷新失败，使用缓存:', type(error).__name__)
+        session['profile'] = profile
+        return profile
 
     def _enter(self, uid, sid):
         with self._lock:
@@ -225,7 +258,7 @@ class AccountManager:
                     old['client'].close()
                 except Exception:
                     pass
-            self.sessions[uid] = {'client': c, 'profile': build_profile(s2c)}
+            self.sessions[uid] = {'client': c, 'profile': build_profile(s2c), 'refreshed_at': time.monotonic()}
             prof = self.sessions[uid]['profile']
             self._log_sessions()      # 上线即留痕：journalctl 可查，不落盘
             return prof

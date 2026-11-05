@@ -41,7 +41,7 @@ class MessageTests(unittest.IsolatedAsyncioTestCase):
             if kw['openid'] == 'alice':
                 entered.set()
                 await release.wait()
-            return kw['url']
+            return {'file_info': kw['url']}
 
         client.api = types.SimpleNamespace(post_c2c_file=AsyncMock(side_effect=upload),
                                            post_c2c_message=AsyncMock())
@@ -57,7 +57,7 @@ class MessageTests(unittest.IsolatedAsyncioTestCase):
             await first
         pairs = [(c.kwargs['openid'], c.kwargs['media'])
                  for c in client.api.post_c2c_message.call_args_list]
-        self.assertCountEqual(pairs, [('alice', 'alice'), ('bob', 'bob')])
+        self.assertCountEqual(pairs, [('alice', {'file_info': 'alice'}), ('bob', {'file_info': 'bob'})])
 
     async def test_busy_limit_and_event_loop_remains_responsive(self):
         client = bot.MyClient()
@@ -105,7 +105,7 @@ class MessageTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot, 'CARD_BASE', 'https://cards.invalid'), \
                 patch.object(bot, 'save_card', return_value='url'), contextlib.redirect_stdout(output):
             await client._reply(msg, 'alice', bot.Reply('fallback', b'image'))
-        msg.reply.assert_awaited_once_with(content='fallback')
+        msg.reply.assert_awaited_once_with(content='战绩卡片发送失败，已显示文字。\nfallback')
         self.assertNotIn('secret', output.getvalue())
 
     async def test_private_logs_do_not_include_credentials(self):
@@ -145,12 +145,12 @@ class StorageTests(unittest.TestCase):
             mgr.send_code.assert_called_once_with('alice', '13800138000')
             mgr.login_with_code.assert_called_once_with('bob', '123456')
 
-    def test_no_card_configuration_skips_expensive_render(self):
+    def test_no_card_url_still_renders_for_direct_upload(self):
         with patch.object(bot, 'CARD_BASE', ''), patch.object(bot, 'mgr') as mgr, \
-                patch('bot_viz.render_report_png') as render:
+                patch('bot_viz.render_report_png', return_value=b'png') as render:
             mgr.get_profile.return_value = ({'uid': 1}, '')
-            self.assertIsNone(bot.profile_of('alice').image)
-            render.assert_not_called()
+            self.assertEqual(bot.profile_of('alice').image, b'png')
+            render.assert_called_once()
 
     def test_concurrent_card_files_are_unique(self):
         with tempfile.TemporaryDirectory() as d, patch.object(bot, 'CARD_DIR', d):

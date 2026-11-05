@@ -3,7 +3,7 @@
 依赖：Pillow + 中文字体（服务器需 apt install fonts-noto-cjk）。"""
 import io
 import os
-from stats_report import build_report, average as _average, number as _num, percent
+from stats_report import build_report, average as _average, number as _num, percent, replay_note
 from PIL import Image, ImageDraw, ImageFont
 
 _BOLD_CANDIDATES = [
@@ -28,6 +28,12 @@ def _find(cands):
 _FP_BOLD = _find(_BOLD_CANDIDATES)
 _FP_REG = _find(_REG_CANDIDATES)
 _FCACHE = {}
+
+def font_status():
+    if not _FP_REG or not _FP_BOLD:
+        return 'font_missing: Ubuntu/Debian 请安装 fonts-noto-cjk 后重启'
+    return 'font_files_found'
+
 
 def F(size, bold=False):
     key = (size, bold)
@@ -120,7 +126,8 @@ def render_report(report):
                         _num(row['damage']), _num(row['transfer']), outcome])
     sections.append(('对局明细', f"最近样本内匹配 {summary['count']} 场", detail_columns,
                      ['序号', '角色', '模式', '伤害', '转账', '结果'], details, {}))
-    height = 396 + sum(48 + 40 + max(1, len(section[4])) * 46 + 22 for section in sections) + 84
+    data_note = replay_note(report)
+    height = (24 if data_note else 0) + 396 + sum(48 + 40 + max(1, len(section[4])) * 46 + 22 for section in sections) + 84
     img = Image.new('RGB', (1200, height), '#F5F6F8')
     d = ImageDraw.Draw(img)
     d.rectangle((24, 24, 1176, height-24), fill='white')
@@ -183,6 +190,9 @@ def render_report(report):
            font=F(17), fill=MUTED, anchor='lm')
     d.text((40, y+30), f'仅筛选协议最近 10 条，不保证覆盖今日全部对局；{report.missing_time} 条缺少时间被排除。',
            font=F(17), fill=MUTED, anchor='lm')
+    if data_note:
+        note, font = _fit(d, data_note, 1120, 17)
+        d.text((40, y+54), note, font=font, fill=MUTED, anchor='lm')
     return img
 
 

@@ -258,17 +258,29 @@ def replay_rows(profile):
     uid = str(profile.get('uid', ''))
 
     def fill(row):
-        rid = str(row.get('replay') or '').strip()
-        if re.fullmatch(r'[0-9]{16}', rid):
+        rid = str(row.get('replay') or row.get('replayId') or '').strip()
+        if not rid:
+            row['replay_status'] = 'no_id'
+        elif not re.fullmatch(r'[0-9]{16}', rid):
+            row['replay_status'] = 'invalid_id'
+        else:
             try:
-                stats = (fetch_replay_stats(rid).get(uid) or {}).get('stats') or {}
-                row['damage'], row['transfer'] = stats.get('伤害'), stats.get('转账')
+                player = fetch_replay_stats(rid).get(uid)
+                stats = (player or {}).get('stats') or {}
+                for field, name in [('damage', '伤害'), ('transfer', '转账')]:
+                    if stats.get(name) is not None:
+                        row[field] = stats[name]
+                row['replay_status'] = 'ok' if any(stats.get(k) is not None for k in ('伤害', '转账')) else 'no_stats'
             except Exception as error:
-                print('[stats] 回放解析失败:', type(error).__name__)
+                row['replay_status'] = 'failed'
+                print('[stats] stage=replay failed', type(error).__name__)
         return row
 
     with ThreadPoolExecutor(max_workers=5) as pool:
-        return list(pool.map(fill, rows))
+        result = list(pool.map(fill, rows))
+    from collections import Counter
+    print('[stats] replay_summary', dict(Counter(r['replay_status'] for r in result)))
+    return result
 
 
 def card_from_profile(profile):

@@ -114,6 +114,21 @@ def percent(value):
     return '—' if value is None else f'{value:.1f}%'
 
 
+def replay_note(report):
+    if not report.rows:
+        return ''
+    if report.profile.get('source') == 'public':
+        return '公开协议未提供回放号，无法补齐伤害与转账。'
+    missing = sum(r.get('replay_status') in ('no_id', 'invalid_id') for r in report.rows)
+    failed = sum(r.get('replay_status') in ('failed', 'no_stats') for r in report.rows)
+    parts = []
+    if missing:
+        parts.append(f'{missing} 场未提供有效回放号')
+    if failed:
+        parts.append(f'{failed} 场回放指标暂不可用')
+    return '；'.join(parts) + ('。' if parts else '')
+
+
 def format_report(report):
     p, s = report.profile, report.summary
     label = {'overview': '战绩总览', 'recent': '今日战绩', 'hero': '角色战绩'}[report.view]
@@ -141,5 +156,8 @@ def format_report(report):
         lines.append(f"· [{row['mode']}] {row['hero']}｜{outcome}｜伤害 {number(row['damage'])}｜转账 {number(row['transfer'])}")
     if not report.rows:
         lines.append('暂无符合条件的对局记录')
+    note = replay_note(report)
+    if note:
+        lines.append(note)
     lines.append('— 为未提供数据；场均仅计算对应指标有数据的对局。')
     return '\n'.join(lines)

@@ -56,12 +56,12 @@ class ReportTests(unittest.TestCase):
         self.assertIsNone(report.summary['winrate'])
         self.assertIn('累计数据未提供', format_report(report))
 
-    def test_text_only_does_not_fetch_replays(self):
+    def test_text_only_still_fetches_replays(self):
         manager = Mock()
         manager.get_profile.return_value = (self.profile, '')
-        with patch.object(bot_ext, 'replay_rows') as fetch:
+        with patch.object(bot_ext, 'replay_rows', side_effect=lambda p: p['recent']) as fetch:
             result = StatsQuery(manager, images=False).mine('alice')
-        fetch.assert_not_called()
+        fetch.assert_called_once()
         self.assertIsNone(result.image)
         self.assertIn('测试玩家', result.text)
 

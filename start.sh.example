@@ -2,6 +2,7 @@
 # 复制本文件为 start.sh 并填入你自己的凭据；start.sh 已被 .gitignore 排除，不会进仓库
 export QQ_APPID=你的机器人APPID
 export QQ_SECRET=你的机器人SECRET
-export CARD_BASE_URL=http://你的服务器公网IP:8420   # 战绩卡片图片服务地址（需在云防火墙放行 TCP 8420）
+# 可选：公网 URL 上传通道；未设置时卡片使用 QQ 直传，无需开放 8420
+# export CARD_BASE_URL=http://你的服务器公网IP:8420
 cd "$(dirname "$0")"
 exec python3 -u qq_bot.py

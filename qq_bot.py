@@ -14,6 +14,7 @@ except ImportError:
 from bot_core import AccountManager
 import bot_ext
 from stats_query import StatsQuery
+from qq_media import upload_image, error_code, failure_reason
 
 APP_ID = os.environ.get('QQ_APPID', '')
 SECRET = os.environ.get('QQ_SECRET', '')
@@ -48,12 +49,15 @@ mgr = AccountManager()
 
 
 CARD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cards')
-CARD_BASE = os.environ.get('CARD_BASE_URL', '')   # 开源版：必填，例 http://你的服务器IP:8420
+CARD_BASE = os.environ.get('CARD_BASE_URL', '').strip().rstrip('/')  # 可选的 URL 上传通道；默认直传
 CARD_PORT = int(os.environ.get('CARD_PORT', '8420'))
 
 
 def _start_card_server():
     """内置迷你 HTTP 服务：把生成的卡片 PNG 暴露成公网 URL 供 QQ 平台抓图"""
+    if not CARD_BASE:
+        print('[cards] mode=direct_upload（无需 CARD_BASE_URL / 公网图片服务）')
+        return
     import threading
     import functools
     from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
@@ -101,7 +105,7 @@ def save_card(png: bytes) -> str:
 
 
 def profile_of(qq_uid, view='overview', hero='', battle_type='pve'):
-    result = StatsQuery(mgr, images=bool(CARD_BASE)).mine(qq_uid, view, hero, battle_type)
+    result = StatsQuery(mgr, images=True).mine(qq_uid, view, hero, battle_type)
     return Reply(result.text, result.image)
 
 
@@ -109,7 +113,7 @@ def do_query(arg, requester=None, view='overview', hero='', battle_type='pve'):
     if not re.fullmatch(r'[0-9]{5,10}', arg):
         return '用法：/查 游戏UID [近期 或 角色 角色名]'
     try:
-        result = StatsQuery(mgr, images=bool(CARD_BASE)).player(arg, requester, view, hero, battle_type)
+        result = StatsQuery(mgr, images=True).player(arg, requester, view, hero, battle_type)
         return Reply(result.text, result.image)
     except Exception as error:
         print('[stats] 查询失败:', type(error).__name__)
@@ -261,32 +265,53 @@ class MyClient(qqbot.Client):
             return Reply('处理失败，请稍后重试。')
 
     async def on_ready(self):
+        try:
+            from bot_viz import font_status
+            print('[cards]', font_status())
+        except ImportError:
+            print('[cards] renderer_import_failed: 请检查 Pillow 安装')
         print('[bot] 已上线，等待消息...')
 
     async def _reply(self, message, target, result, group=False):
         text = result.text[:1900]
+        fallback_seq = 1
         try:
-            if result.image and CARD_BASE:
+            if result.image:
+                stage = 'prepare'
                 try:
-                    url = await asyncio.to_thread(save_card, result.image)
+                    url = None
+                    if CARD_BASE:
+                        try:
+                            url = await asyncio.to_thread(save_card, result.image)
+                        except OSError as error:
+                            print('[cards] stage=save failed; try direct_upload', type(error).__name__)
+                    stage = 'upload'
+                    media = await upload_image(self.api, target, result.image, group=group, url=url)
+                    stage = 'send'
+                    # The media send may have reached QQ even if its response was lost.
+                    fallback_seq = 2
                     if group:
-                        media = await self.api.post_group_file(
-                            group_openid=target, file_type=1, url=url, srv_send_msg=False)
-                        await self.api.post_group_message(
+                        sent = await self.api.post_group_message(
                             group_openid=target, msg_type=7, media=media,
                             msg_id=message.id, msg_seq=1)
                     else:
-                        media = await self.api.post_c2c_file(
-                            openid=target, file_type=1, url=url, srv_send_msg=False)
-                        await self.api.post_c2c_message(
+                        sent = await self.api.post_c2c_message(
                             openid=target, msg_type=7, media=media,
                             msg_id=message.id, msg_seq=1)
+                    if sent is None:
+                        raise RuntimeError('empty_send_response')
+                    print('[cards] sent')
                     return
-                except Exception as e:
-                    print('[reply error] 图片发送失败，回退纯文字:', type(e).__name__)
-            await message.reply(content=text)
-        except Exception as e:
-            print('[reply error]', type(e).__name__)
+                except Exception as error:
+                    print('[cards] stage=' + stage + ' failed; text_fallback',
+                          type(error).__name__, 'code=' + error_code(error), 'reason=' + failure_reason(error))
+                    text = ('战绩卡片发送失败，已显示文字。\n' + result.text)[:1900]
+            kwargs = {'content': text}
+            if fallback_seq > 1:
+                kwargs['msg_seq'] = fallback_seq
+            await message.reply(**kwargs)
+        except Exception as error:
+            print('[reply error]', type(error).__name__, 'code=' + error_code(error), 'reason=' + failure_reason(error))
 
     async def on_group_at_message_create(self, message):
         uid = str(getattr(message.author, 'member_openid', '') or '')

@@ -35,7 +35,7 @@ class StatsQuery:
         rows = profile.get('recent', [])[:10]
         now = datetime.now(BEIJING)
         report = build_report(profile, rows, view, hero, battle_type, now=now)
-        if self.images:
+        if report.rows:
             enriched = bot_ext.replay_rows(dict(profile, recent=report.rows))
             enriched_report = build_report(profile, enriched, view, hero, battle_type, now=now)
             enriched_report.sample_count = report.sample_count
@@ -48,5 +48,11 @@ class StatsQuery:
                 from bot_viz import render_report_png
                 image = render_report_png(report)
             except Exception as error:
-                print('[stats] 图片生成失败，回退文字:', type(error).__name__)
+                try:
+                    from bot_viz import font_status
+                    status = font_status()
+                except Exception:
+                    status = 'renderer_import_failed: 请检查 Pillow 安装'
+                print('[stats] stage=render failed', type(error).__name__, status)
+                text = '战绩卡片生成失败，已显示文字。\n' + text
         return QueryResult(text, image)

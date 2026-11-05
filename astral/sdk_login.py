@@ -97,12 +97,28 @@ def request_code(tel_num, channel='test_junhai', types=CODE_TYPES, save=True, do
     raise LoginError(last_err or '发送验证码失败')
 
 
+def diagnostic_response(resp):
+    """存档仅保留状态，不保存 SDK 返回的票据或个人资料。"""
+    ret = str(resp.get('ret', ''))
+    return {'ret': ret if ret in ('0', '1') else 'unknown',
+            'has_content': bool(resp.get('content'))}
+
+
+def diagnostic_payload(value):
+    if isinstance(value, dict):
+        return {k: diagnostic_response(v) if k in ('resp', 'init_resp') and isinstance(v, dict)
+                else diagnostic_payload(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [diagnostic_payload(v) for v in value]
+    return value
+
+
 def _save(kind, note, payload):
     try:
         SAVE_DIR.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         out = SAVE_DIR / ('%s_%s.json' % (kind, stamp))
-        out.write_text(json.dumps({'kind': kind, 'note': note, 'when': stamp, **payload},
+        out.write_text(json.dumps({'kind': kind, 'note': note, 'when': stamp, **diagnostic_payload(payload)},
                                   ensure_ascii=False, indent=2), encoding='utf-8')
         return out
     except Exception:
@@ -130,7 +146,7 @@ def _submit(tel_num, secret, login_type, channel='test_junhai', do_init=True,
         cred + '_len': len(str(secret)),        # 只记长度，凭据不落盘
         'login_type': login_type,
         'channel': channel,
-        'resp': r,
+        'resp': diagnostic_response(r),
     }, ensure_ascii=False, indent=2), encoding='utf-8')
 
     good, emsg = _check(r)
@@ -207,10 +223,9 @@ def token_login(access_token, tel='', channel='test_junhai', do_init=True):
     out.write_text(json.dumps({
         'login_type': '2',
         'via': 'channel client token',
-        'token_masked': '%s…%s(%d位)' % (str(access_token)[:5], str(access_token)[-4:],
-                                        len(str(access_token))),
+        'token_length': len(str(access_token)),
         'channel': channel,
-        'resp': r,
+        'resp': diagnostic_response(r),
     }, ensure_ascii=False, indent=2), encoding='utf-8')
 
     good, emsg = _check(r)

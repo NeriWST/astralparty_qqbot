@@ -145,12 +145,13 @@ class AstralClient:
         同时兼容服务器以同号回错误包的情况（两个号都监听）。"""
         body = (bytes(msg) if isinstance(msg, (bytes, bytearray))
                 else (msg.SerializeToString() if msg is not None else b''))
-        self.upsn += 1
-        pkt = frame.encode(cmd_id, body, session_id=self.session_id,
-                           upsn=self.upsn, downsn=self.downsn, mode=self.xor_mode)
-        if not self.sock:
-            raise ProtocolError('未连接')
         with self._send_lock:
+            # 心跳线程和查询线程共用连接；序号分配必须与实际发送顺序一致。
+            if not self.sock:
+                raise ProtocolError('未连接')
+            self.upsn += 1
+            pkt = frame.encode(cmd_id, body, session_id=self.session_id,
+                               upsn=self.upsn, downsn=self.downsn, mode=self.xor_mode)
             self.sock.sendall(pkt)
         if wait is None:
             return None

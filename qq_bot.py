@@ -1,17 +1,22 @@
 # -*- coding: utf-8 -*-
 """QQ 接入层。私聊登录，群聊查战绩；/回放 回放号免登录战报。"""
 import os, re
+import asyncio
+import threading
+import uuid
+from dataclasses import dataclass
 
 try:
     import qqbot
 except ImportError:
     import botpy as qqbot
 
-from bot_core import AccountManager, format_profile
+from bot_core import AccountManager
 import bot_ext
+from stats_query import StatsQuery
 
-APP_ID = os.environ['QQ_APPID']
-SECRET = os.environ['QQ_SECRET']
+APP_ID = os.environ.get('QQ_APPID', '')
+SECRET = os.environ.get('QQ_SECRET', '')
 
 HELP_TEXT = (
     '【星趴战绩机器人 · 使用帮助】\n'
@@ -29,7 +34,11 @@ HELP_TEXT = (
     '· 群里：@我 发 /我的\n'
     '· 私聊：直接发 /我的\n'
     '· 查单局详细战报（免登录）：/回放 16位回放号\n'
-    '· 查任意玩家（基础信息）：/查 游戏UID（6~7位数字）\n'
+    '· 查任意玩家：/查 游戏UID\n'
+    '· 默认 PVE：/atp me 或 /atp UID\n'
+    '· 今日 PVE：/atp me recent（北京时间）\n'
+    '· 更多查询指令：/atp help\n'
+    '· 角色分析：/我的 角色 帕露南 或 /查 UID 角色 帕露南\n'
     '· 看队友实时手牌（仅PVE）：/手牌 观战码\n'    '\n'
     '⚠️ 重要提醒：机器人登录的是你的游戏账号，同账号同时只能\n'
     '一处在线——查战绩和玩游戏请错开，否则会把游戏顶下线！'
@@ -62,51 +71,101 @@ def _start_card_server():
     threading.Thread(target=run, daemon=True).start()
 
 
+_card_lock = threading.Lock()
+
+
+@dataclass(frozen=True)
+class Reply:
+    text: str
+    image: bytes | None = None
+
+
 def save_card(png: bytes) -> str:
-    """保存卡片并返回公网 URL（文件名带时间戳，避免 QQ 缓存旧图）"""
-    import time as _time
-    os.makedirs(CARD_DIR, exist_ok=True)
-    name = 'card_%d.png' % int(_time.time() * 1000)
-    with open(os.path.join(CARD_DIR, name), 'wb') as f:
-        f.write(png)
-    try:
-        files = sorted(os.listdir(CARD_DIR))
-        for old_f in files[:-50]:
-            os.remove(os.path.join(CARD_DIR, old_f))
-    except Exception:
-        pass
+    """唯一文件名与串行清理，避免并发请求覆盖图片。"""
+    with _card_lock:
+        os.makedirs(CARD_DIR, exist_ok=True)
+        name = 'card_' + uuid.uuid4().hex + '.png'
+        path = os.path.join(CARD_DIR, name)
+        with open(path, 'wb') as f:
+            f.write(png)
+        files = sorted((os.path.join(CARD_DIR, n) for n in os.listdir(CARD_DIR)
+                        if n.startswith('card_') and n.endswith('.png')),
+                       key=os.path.getmtime)
+        for old in files[:-50]:
+            if old != path:
+                try:
+                    os.remove(old)
+                except OSError:
+                    pass
     return CARD_BASE.rstrip('/') + '/' + name
 
 
-IMG_PAYLOAD = [None]   # /我的 时暂存卡片 PNG bytes（list 技巧免 global）
+def profile_of(qq_uid, view='overview', hero='', battle_type='pve'):
+    result = StatsQuery(mgr, images=bool(CARD_BASE)).mine(qq_uid, view, hero, battle_type)
+    return Reply(result.text, result.image)
 
 
-def _attach_card(p):
+def do_query(arg, requester=None, view='overview', hero='', battle_type='pve'):
+    if not re.fullmatch(r'[0-9]{5,10}', arg):
+        return '用法：/查 游戏UID [近期 或 角色 角色名]'
     try:
-        IMG_PAYLOAD[0] = bot_ext.card_from_profile(p)
-    except Exception as e:
-        print('[card] 卡片生成失败（回退纯文字）:', e)
-        IMG_PAYLOAD[0] = None
+        result = StatsQuery(mgr, images=bool(CARD_BASE)).player(arg, requester, view, hero, battle_type)
+        return Reply(result.text, result.image)
+    except Exception as error:
+        print('[stats] 查询失败:', type(error).__name__)
+        return '查询失败，请稍后重试。'
 
 
-def profile_of(qq_uid):
-    p, err = mgr.get_profile(qq_uid)
-    if p is None:
-        return err
-    _attach_card(p)
-    return format_profile(p)
+ATP_HELP = (
+    '【ATP 战绩查询】默认 PVE\n'
+    '/atp me — 最近记录中的 PVE 战绩总览\n'
+    '/atp me recent — 今日 PVE（北京时间）\n'
+    '/atp me char 芬妮 — 最近记录中的角色 PVE 战绩\n'
+    '/atp me pvp — PVP 战绩；/atp me all — 全部模式\n'
+    '/atp me pvp recent — 今日 PVP\n'
+    '/atp 1234567 — 公开玩家 PVE 战绩\n'
+    '/atp 1234567 char 芬妮 — 公开玩家角色 PVE 战绩\n'
+    '仅在协议返回的最近 10 条内筛选，不能保证覆盖当日全部对局。\n'
+    '公开 UID 查询没有对局时间，不支持 recent。'
+)
 
 
-
-def do_query(arg, requester=None):
-    m = re.match(r'^(\d{5,10})$', arg)
-    if not m:
-        return '用法：/查 游戏UID（6~7 位数字，游戏内个人资料页可见）'
-    try:
-        res = bot_ext.query_uid(mgr, m.group(1), prefer_uid=requester)
-        return bot_ext.format_uid_profile(m.group(1), res)
-    except Exception as e:
-        return '查询出错：%s' % e
+def stats_command(text, requester):
+    """/atp <me|UID> [pve|pvp|all] [recent|char 角色名]，兼容中文入口。"""
+    tokens = text.split()
+    if not tokens or tokens[0] not in ('/atp', '/我的', '我的', '/查'):
+        return None
+    if tokens[0] == '/atp':
+        if len(tokens) < 2 or tokens[1].lower() in ('help', '帮助'):
+            return ATP_HELP
+        target, options = tokens[1], tokens[2:]
+        mine = target.lower() == 'me'
+    else:
+        mine = tokens[0] != '/查'
+        if not mine and len(tokens) < 2:
+            return '用法：' + ATP_HELP
+        target = 'me' if mine else tokens[1]
+        options = tokens[1:] if mine else tokens[2:]
+    if not mine and not re.fullmatch(r'[0-9]{5,10}', target):
+        return '用法：' + ATP_HELP
+    view, hero, battle_type = 'overview', '', 'pve'
+    selected_mode = False
+    while options:
+        token, options = options[0].lower(), options[1:]
+        if token in ('pve', 'pvp', 'all') and not selected_mode:
+            battle_type, selected_mode = token, True
+        elif token in ('recent', '近期', '今日') and view == 'overview':
+            view = 'recent'
+        elif token in ('char', '角色') and view == 'overview' and options:
+            hero, view = ' '.join(options), 'hero'
+            options = []
+        else:
+            return '用法：' + ATP_HELP
+    if mine:
+        if not requester:
+            return '还没绑定。先在群里 /绑定，然后私聊完成绑定。'
+        return profile_of(requester, view, hero, battle_type)
+    return do_query(target, requester, view, hero, battle_type)
 
 
 def do_watch(arg):
@@ -127,34 +186,32 @@ def do_replay(arg):
     return bot_ext.format_replay_stats(m.group(1))
 
 
-def handle_private(text):
+def handle_private(text, user_openid):
     """私聊指令（user_openid 标识身份）"""
     text = text.strip()
     if text in ('/帮助', '帮助', '/help', 'help'):
         return HELP_TEXT
-    if text in ('/我的', '我的'):
-        return profile_of(USER)
+    stats = stats_command(text, user_openid)
+    if stats is not None:
+        return stats
     m = re.match(r'^/登录\s+(\d{11})$', text)
     if m:
         try:
-            return mgr.send_code(USER, m.group(1))
+            return mgr.send_code(user_openid, m.group(1))
         except Exception as e:
             return '发送验证码失败：%s' % e
     m = re.match(r'^/验证码\s+(\d{4,8})$', text)
     if m:
         try:
-            return mgr.login_with_code(USER, m.group(1))
+            return mgr.login_with_code(user_openid, m.group(1))
         except Exception as e:
             return '登录失败：%s' % e
     m = re.match(r'^/绑定\s+(\d{6})$', text)
     if m:
-        return mgr.bind(USER, m.group(1))
+        return mgr.bind(user_openid, m.group(1))
     m = re.match(r'^/回放\s+(\S+)$', text)
     if m:
         return do_replay(m.group(1))
-    m = re.match(r'^/查\s+(\S+)$', text)
-    if m:
-        return do_query(m.group(1), USER)
     m = re.match(r'^/手牌\s+(\S+)$', text)
     if m:
         return do_watch(m.group(1))
@@ -169,17 +226,12 @@ def handle_group(text, member_openid):
     if text in ('/绑定', '绑定'):
         code = mgr.make_bind_code(member_openid)
         return '你的绑定码：%s\n私聊我发：/绑定 %s（10分钟内有效）' % (code, code)
-    if text in ('/我的', '我的'):
-        uid = mgr.resolve_member(member_openid)
-        if not uid:
-            return '还没绑定。先 @我 发 /绑定 获取绑定码，然后私聊我完成绑定。'
-        return profile_of(uid)
+    stats = stats_command(text, mgr.resolve_member(member_openid))
+    if stats is not None:
+        return stats
     m = re.match(r'^/回放\s+(\S+)$', text)
     if m:
         return do_replay(m.group(1))
-    m = re.match(r'^/查\s+(\S+)$', text)
-    if m:
-        return do_query(m.group(1), mgr.resolve_member(member_openid))
     m = re.match(r'^/手牌\s+(\S+)$', text)
     if m:
         return do_watch(m.group(1))
@@ -187,56 +239,77 @@ def handle_group(text, member_openid):
 
 
 class MyClient(qqbot.Client):
+    async def _dispatch(self, handler, *args):
+        # 不排无限队列：所有 worker 忙时立即回复，避免积压过期的被动回复。
+        active = getattr(self, '_active_commands', 0)
+        if active >= 4:
+            return Reply('当前查询较多，请稍后再试。')
+        self._active_commands = active + 1
+        task = asyncio.create_task(asyncio.to_thread(handler, *args))
+
+        def finished(done):
+            self._active_commands -= 1
+            if not done.cancelled():
+                done.exception()  # 回调取消后仍消费后台异常。
+
+        task.add_done_callback(finished)
+        try:
+            result = await asyncio.shield(task)
+            return result if isinstance(result, Reply) else Reply(result)
+        except Exception as e:
+            print('[command error]', type(e).__name__)
+            return Reply('处理失败，请稍后重试。')
+
     async def on_ready(self):
         print('[bot] 已上线，等待消息...')
 
+    async def _reply(self, message, target, result, group=False):
+        text = result.text[:1900]
+        try:
+            if result.image and CARD_BASE:
+                try:
+                    url = await asyncio.to_thread(save_card, result.image)
+                    if group:
+                        media = await self.api.post_group_file(
+                            group_openid=target, file_type=1, url=url, srv_send_msg=False)
+                        await self.api.post_group_message(
+                            group_openid=target, msg_type=7, media=media,
+                            msg_id=message.id, msg_seq=1)
+                    else:
+                        media = await self.api.post_c2c_file(
+                            openid=target, file_type=1, url=url, srv_send_msg=False)
+                        await self.api.post_c2c_message(
+                            openid=target, msg_type=7, media=media,
+                            msg_id=message.id, msg_seq=1)
+                    return
+                except Exception as e:
+                    print('[reply error] 图片发送失败，回退纯文字:', type(e).__name__)
+            await message.reply(content=text)
+        except Exception as e:
+            print('[reply error]', type(e).__name__)
+
     async def on_group_at_message_create(self, message):
         uid = str(getattr(message.author, 'member_openid', '') or '')
-        print('[group]', uid, message.content)
+        gid = str(getattr(message, 'group_openid', '') or '')
+        if not uid or not gid:
+            return
+        print('[group] 收到消息')
         text = re.sub(r'<@!\d+>', '', message.content).strip()
-        reply_text = handle_group(text, uid)[:1900]
-        img = IMG_PAYLOAD[0]; IMG_PAYLOAD[0] = None   # 必须在 handle 之后取（图是当前这条消息生成的）
-        gid = str(getattr(message, 'group_openid', '') or '')   # 群的 openid，不是发言人的
-        try:
-            if img:
-                try:
-                    url = save_card(img)
-                    media = await self.api.post_group_file(group_openid=gid, file_type=1, url=url, srv_send_msg=False)
-                    await self.api.post_group_message(group_openid=gid, msg_type=7, media=media,
-                                                      msg_id=message.id, msg_seq=1)
-                    print('[card] 群图片已发送:', url)
-                except Exception as e:
-                    print('[reply error] 图片发送失败，回退纯文字:', e)
-                    await message.reply(content=reply_text)
-            else:
-                await message.reply(content=reply_text)
-        except Exception as e:
-            print('[reply error]', e)
+        result = await self._dispatch(handle_group, text, uid)
+        await self._reply(message, gid, result, group=True)
 
     async def on_c2c_message_create(self, message):
-        global USER
-        USER = str(getattr(message.author, 'user_openid', '') or '')
-        print('[c2c]', USER, message.content)
-        reply_text = handle_private(message.content.strip())[:1900]
-        img = IMG_PAYLOAD[0]; IMG_PAYLOAD[0] = None   # 必须在 handle 之后取
-        try:
-            if img:
-                try:
-                    url = save_card(img)
-                    media = await self.api.post_c2c_file(openid=USER, file_type=1, url=url, srv_send_msg=False)
-                    await self.api.post_c2c_message(openid=USER, msg_type=7, media=media,
-                                                    msg_id=message.id, msg_seq=1)
-                    print('[card] 私聊图片已发送:', url)
-                except Exception as e:
-                    print('[reply error] 图片发送失败，回退纯文字:', e)
-                    await message.reply(content=reply_text)
-            else:
-                await message.reply(content=reply_text)
-        except Exception as e:
-            print('[reply error]', e)
+        uid = str(getattr(message.author, 'user_openid', '') or '')
+        if not uid:
+            return
+        print('[c2c] 收到消息')
+        result = await self._dispatch(handle_private, message.content.strip(), uid)
+        await self._reply(message, uid, result)
 
 
 if __name__ == '__main__':
+    if not APP_ID or not SECRET:
+        raise SystemExit('请设置 QQ_APPID 和 QQ_SECRET')
     _start_card_server()
     intents = qqbot.Intents(public_messages=True)
     client = MyClient(intents=intents)

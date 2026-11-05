@@ -3,14 +3,17 @@
 依赖：Pillow + 中文字体（服务器需 apt install fonts-noto-cjk）。"""
 import io
 import os
+from stats_report import build_report, average as _average, number as _num, percent
 from PIL import Image, ImageDraw, ImageFont
 
 _BOLD_CANDIDATES = [
+    os.path.join(os.environ.get('WINDIR', 'C:/Windows'), 'Fonts', 'msyhbd.ttc'),
     '/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc',
     '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
     '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
 ]
 _REG_CANDIDATES = [
+    os.path.join(os.environ.get('WINDIR', 'C:/Windows'), 'Fonts', 'msyh.ttc'),
     '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
     '/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc',
     '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
@@ -35,75 +38,163 @@ def F(size, bold=False):
         _FCACHE[key] = ImageFont.truetype(fp, size)
     return _FCACHE[key]
 
-def _vgrad(size, top, bottom):
-    w, h = size
-    col = Image.new('RGB', (1, h))
-    for y in range(h):
-        t = y / max(1, h - 1)
-        col.putpixel((0, y), tuple(int(top[i] + (bottom[i] - top[i]) * t) for i in range(3)))
-    return col.resize((w, h))
+# 中性数据报表：只用色彩区分指标，不依赖背景图或角色装饰。
+INK = '#20262D'
+MUTED = '#77808B'
+GREEN = '#27851E'
+PURPLE = '#7640AF'
+RED = '#B84A4A'
+LINE = '#DDE2E6'
 
-def _num(v):
-    return '-' if v is None else str(v)
 
-def render_stats_card(p, recent):
-    """p: dict(nick, uid, level, online, total, wins, winrate, praise, heroes)
-    recent: list of dict(hero, damage|None, transfer|None, win: bool)，最多 10 条"""
-    W = 1000
-    row_h, head_h, strip_h = 56, 150, 120
-    n = max(1, len(recent))
-    H = 24 + head_h + 26 + strip_h + 8 + 52 + row_h * (n + 1) + 44
-    img = _vgrad((W, H), (252, 250, 254), (238, 236, 244)).convert('RGB')
+def _fit(draw, text, width, size=24, bold=False):
+    text = str(text)
+    font = F(size, bold)
+    if draw.textlength(text, font=font) <= width:
+        return text, font
+    while text and draw.textlength(text + '…', font=font) > width:
+        text = text[:-1]
+    return text + '…', font
+
+
+def _cell(draw, bounds, y, text, color=INK, bold=False, left=False, size=24):
+    x1, x2 = bounds
+    text, font = _fit(draw, text, x2 - x1 - 28, size, bold)
+    draw.text((x1 + 14 if left else (x1 + x2) / 2, y), text,
+              font=font, fill=color, anchor='lm' if left else 'mm')
+
+
+def _section(draw, y, title, note=''):
+    draw.rectangle((40, y + 5, 46, y + 31), fill=INK)
+    draw.text((60, y + 18), title, font=F(28, True), fill=INK, anchor='lm')
+    if note:
+        draw.text((1160, y + 18), note, font=F(18), fill=MUTED, anchor='rm')
+    draw.line((40, y + 42, 1160, y + 42), fill=LINE, width=2)
+    return y + 48
+
+
+def _table_header(draw, y, columns, headings):
+    draw.rectangle((40, y, 1160, y + 40), fill='#E8ECEF')
+    for i, heading in enumerate(headings):
+        _cell(draw, columns[i], y + 20, heading, MUTED, True, i == 0, 20)
+    return y + 40
+
+
+def _row(draw, y, columns, values, index, colors=None, bold=False):
+    draw.rectangle((40, y, 1160, y + 46), fill='#F2F4F6' if index % 2 == 0 else '#FFFFFF')
+    for i, value in enumerate(values):
+        _cell(draw, columns[i], y + 23, value,
+              (colors or {}).get(i, INK), bold or i == 0, i == 0)
+    return y + 46
+
+
+def render_report(report):
+    """纯展示层：不访问网络，不在绘制时再次计算战绩。"""
+    p, summary = report.profile, report.summary
+    titles = {'overview': '战绩总览', 'recent': '今日战绩', 'hero': '角色战绩'}
+    columns = [(40, 280), (280, 420), (420, 560), (560, 740), (740, 950), (950, 1160)]
+    headings = ['统计范围', '场次', '胜场', '胜率', '场均伤害', '场均转账']
+
+    def stats_row(label, stats):
+        return [label, _num(stats['count']), _num(stats['wins']), percent(stats['winrate']),
+                _num(stats['damage']), _num(stats['transfer'])]
+
+    overall = []
+    if report.view == 'overview' and report.battle_type == 'all':
+        overall.append(['累计战绩', _num(p.get('total')), _num(p.get('wins')),
+                        percent(p.get('winrate')), '—', '—'])
+    overall.append(stats_row('筛选样本', summary))
+    overall.extend(stats_row(mode, stats) for mode, stats in report.modes)
+    sections = [('总体数据' if report.view == 'overview' else '样本统计',
+                 '按所选模式及日期汇总', columns, headings, overall, {3: PURPLE, 4: GREEN, 5: GREEN})]
+    if report.view != 'recent':
+        hero_rows = [stats_row(name, stats) for name, stats in report.heroes[:5]]
+        sections.append(('角色数据', '按筛选结果出场数排序 · 最多 5 位', columns,
+                         ['角色', '场次', '胜场', '胜率', '场均伤害', '场均转账'],
+                         hero_rows, {3: PURPLE, 4: GREEN, 5: GREEN}))
+    detail_columns = [(40, 110), (110, 350), (350, 610), (610, 810), (810, 1010), (1010, 1160)]
+    details = []
+    for i, row in enumerate(report.rows):
+        outcome = '胜' if row['win'] is True else '负' if row['win'] is False else '未知'
+        details.append([f'{i+1:02}', row['hero'], row['mode'],
+                        _num(row['damage']), _num(row['transfer']), outcome])
+    sections.append(('对局明细', f"最近样本内匹配 {summary['count']} 场", detail_columns,
+                     ['序号', '角色', '模式', '伤害', '转账', '结果'], details, {}))
+    height = 396 + sum(48 + 40 + max(1, len(section[4])) * 46 + 22 for section in sections) + 84
+    img = Image.new('RGB', (1200, height), '#F5F6F8')
     d = ImageDraw.Draw(img)
-    d.rounded_rectangle([24, 24, W-24, H-24], radius=24, fill=(255, 255, 255), outline=(215, 210, 228), width=2)
-    d.rounded_rectangle([24, 24, W-24, 24+head_h], radius=24, fill=(126, 96, 191))
-    d.rectangle([24, 24+head_h-30, W-24, 24+head_h], fill=(126, 96, 191))
-    d.text((64, 70), str(p['nick']), font=F(46, True), fill=(255, 255, 255))
-    d.text((64, 128), 'UID %s' % p['uid'], font=F(24), fill=(228, 222, 245))
-    d.text((280, 128), 'Lv.%d' % p.get('level', 0), font=F(24), fill=(255, 235, 160))
+    d.rectangle((24, 24, 1176, height-24), fill='white')
+    d.text((40, 49), 'ASTRAL PARTY  /  ' + titles[report.view], font=F(18, True), fill=MUTED, anchor='lm')
+    nick, font = _fit(d, p.get('nick', '未知玩家'), 900, 43, True)
+    d.text((40, 96), nick, font=font, fill=INK, anchor='lm')
+    meta = f"国服 · UID {p.get('uid', '—')} · Lv.{_num(p.get('level'))}"
+    meta += ' · 公开查询' if p.get('source') == 'public' else ' · 账号档案'
+    if report.hero:
+        meta += ' · ' + report.hero
+    meta, font = _fit(d, meta, 1100, 21)
+    d.text((40, 142), meta, font=font, fill=MUTED, anchor='lm')
     if p.get('online'):
-        d.ellipse([W-190, 76, W-168, 98], fill=(120, 235, 150))
-        d.text((W-156, 87), '在线', font=F(24, True), fill=(255, 255, 255), anchor='lm')
-    y0 = 24 + head_h + 26
-    cells = [('总场次', p['total']), ('胜率', '%.1f%%' % p['winrate']),
-             ('胜场', p['wins']), ('获赞', p['praise']), ('拥有角色', p['heroes'])]
-    cw = (W - 48 - 40 - 4 * 16) / 5
-    for i, (k, v) in enumerate(cells):
-        x = 44 + i * (cw + 16)
-        d.rounded_rectangle([x, y0, x + cw, y0 + strip_h - 20], radius=14, fill=(247, 245, 252), outline=(225, 220, 238), width=1)
-        d.text((x + cw/2, y0 + 26), k, font=F(22), fill=(120, 112, 145), anchor='mm')
-        d.text((x + cw/2, y0 + 68), str(v), font=F(36, True),
-               fill=(110, 80, 200) if i == 1 else (45, 42, 60), anchor='mm')
-    ty = y0 + strip_h + 8
-    d.rectangle([44, ty, 208, ty + 40], fill=(75, 72, 88))
-    d.text((60, ty + 20), '近期战绩', font=F(26, True), fill=(255, 255, 255), anchor='lm')
-    d.text((W - 56, ty + 20), '最近 %d 场' % len(recent), font=F(22), fill=(140, 134, 158), anchor='rm')
-    t_y = ty + 52
-    d.text((80, t_y + row_h/2), '角色', font=F(24, True), fill=(95, 90, 115), anchor='lm')
-    d.text((430, t_y + row_h/2), '伤害', font=F(24, True), fill=(95, 90, 115), anchor='mm')
-    d.text((620, t_y + row_h/2), '转账', font=F(24, True), fill=(95, 90, 115), anchor='mm')
-    d.text((W - 80, t_y + row_h/2), '输赢', font=F(24, True), fill=(95, 90, 115), anchor='rm')
-    d.line([56, t_y + row_h, W - 56, t_y + row_h], fill=(228, 224, 236), width=2)
-    for i, r in enumerate(recent[:10]):
-        ry = t_y + row_h * (i + 1)
-        if i % 2 == 0:
-            d.rectangle([56, ry, W - 56, ry + row_h], fill=(248, 246, 252))
-        d.text((80, ry + row_h/2), str(r.get('hero', '?')), font=F(26, True), fill=(52, 48, 70), anchor='lm')
-        d.text((430, ry + row_h/2), _num(r.get('damage')), font=F(26), fill=(70, 66, 88), anchor='mm')
-        d.text((620, ry + row_h/2), _num(r.get('transfer')), font=F(26), fill=(70, 66, 88), anchor='mm')
-        bw = 92
-        bx = W - 80 - bw
-        if r.get('win'):
-            d.rounded_rectangle([bx, ry + 10, bx + bw, ry + row_h - 10], radius=18, fill=(86, 200, 130))
-            d.text((bx + bw/2, ry + row_h/2), '胜', font=F(26, True), fill=(255, 255, 255), anchor='mm')
-        else:
-            d.rounded_rectangle([bx, ry + 10, bx + bw, ry + row_h - 10], radius=18, fill=(196, 198, 210))
-            d.text((bx + bw/2, ry + row_h/2), '负', font=F(26, True), fill=(255, 255, 255), anchor='mm')
-    d.line([56, t_y + row_h * (n + 1), W - 56, t_y + row_h * (n + 1)], fill=(228, 224, 236), width=2)
+        d.ellipse((1050, 88, 1062, 100), fill=GREEN)
+        d.text((1074, 94), '在线', font=F(21, True), fill=GREEN, anchor='lm')
+    d.rectangle((40, 174, 1160, 228), fill='#318B25')
+    d.text((56, 201), '今日表现' if report.view == 'recent' else report.battle_type.upper() + ' 表现', font=F(27, True), fill='white', anchor='lm')
+    description = f"{summary['count']} 场 / {summary['wins']} 胜 {summary['losses']} 负"
+    if summary['unknown']:
+        description += f" / {summary['unknown']} 场未知"
+    d.text((218, 201), description, font=F(21), fill='white', anchor='lm')
+    d.text((1144, 201), '胜率  ' + percent(summary['winrate']), font=F(30, True), fill='white', anchor='rm')
+    if report.view == 'overview' and report.battle_type == 'all':
+        metrics = [('累计场次', _num(p.get('total'))), ('累计胜率', percent(p.get('winrate'))),
+                   ('累计胜场', _num(p.get('wins'))), ('获赞', _num(p.get('praise'))),
+                   ('拥有角色', _num(p.get('heroes')))]
+    else:
+        metrics = [('样本场次', str(summary['count'])), ('样本胜率', percent(summary['winrate'])),
+                   ('样本胜场', str(summary['wins'])), ('场均伤害', _num(summary['damage'])),
+                   ('场均转账', _num(summary['transfer']))]
+    for i, (label, value) in enumerate(metrics):
+        x = 40 + i * 224
+        d.rectangle((x, 246, x+212, 340), fill='#F2F4F6')
+        d.text((x+106, 268), label, font=F(20, True), fill=MUTED, anchor='mm')
+        value, font = _fit(d, value, 200, 34, True)
+        d.text((x+106, 309), value, font=font, fill=PURPLE if i == 1 else INK, anchor='mm')
+        d.line((x, 340, x+212, 340), fill='#97BDCF', width=2)
+    scope = '范围：' + report.scope
+    if report.hero:
+        scope += ' · ' + report.hero
+    if p.get('stale'):
+        scope += ' · 包含缓存数据'
+    if p.get('records_error'):
+        scope = '近期对局获取失败，请稍后重试；当前仅展示已获取的身份资料。'
+    scope, font = _fit(d, scope, 1120, 17)
+    d.text((40, 362), scope, font=font, fill=MUTED, anchor='lm')
+    y = 396
+    for title, note, cols, labels, rows, colors in sections:
+        y = _section(d, y, title, note)
+        y = _table_header(d, y, cols, labels)
+        if not rows:
+            rows = [['暂无记录'] + ['—'] * (len(cols)-1)]
+        for i, values in enumerate(rows):
+            cell_colors = dict(colors)
+            if title == '对局明细':
+                cell_colors[5] = GREEN if values[5] == '胜' else RED if values[5] == '负' else MUTED
+            y = _row(d, y, cols, values, i, cell_colors)
+        y += 22
+    d.text((40, y+5), f"伤害有效样本 {summary['damage_count']} 场 · 转账有效样本 {summary['transfer_count']} 场；均值不含缺失项。",
+           font=F(17), fill=MUTED, anchor='lm')
+    d.text((40, y+30), f'仅筛选协议最近 10 条，不保证覆盖今日全部对局；{report.missing_time} 条缺少时间被排除。',
+           font=F(17), fill=MUTED, anchor='lm')
     return img
 
-def render_stats_card_png(p, recent):
-    img = render_stats_card(p, recent)
+
+def render_stats_card(p, recent):
+    return render_report(build_report(p, recent))
+
+
+def render_report_png(report):
     buf = io.BytesIO()
-    img.save(buf, 'PNG')
+    render_report(report).save(buf, 'PNG')
     return buf.getvalue()
+
+
+def render_stats_card_png(p, recent):
+    return render_report_png(build_report(p, recent))

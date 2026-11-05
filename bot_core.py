@@ -3,6 +3,7 @@
 每个 QQ 用户登录自己的游戏账号，凭据按用户隔离存放，互不干扰。"""
 import os, json, time, hashlib, threading, random
 from pathlib import Path
+from functools import wraps
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / 'userdata'
@@ -78,7 +79,8 @@ def build_profile(s2c):
             continue
         recent.append({
             'time': int(getattr(r, 'time', 0) or 0),
-            'mode': MODE.get(int(getattr(r, 'mapType', getattr(mine, 'mapType', 1)) or 1), '?'),
+            'mode_id': int(getattr(r, 'mapType', getattr(mine, 'mapType', 0)) or 0),
+            'mode': MODE.get(int(getattr(r, 'mapType', getattr(mine, 'mapType', 0)) or 0), '未知模式'),
             'hero': HERO.get(int(getattr(mine, 'heroId', 0) or 0), '?'),
             'rank': int(getattr(mine, 'rank', 0) or 0),
             'replay': str(getattr(mine, 'replayId', '') or getattr(r, 'replayId', '') or ''),
@@ -107,11 +109,20 @@ def format_profile(p):
     return '\n'.join(L)
 
 
+def synchronized(method):
+    """保护账号状态和共享连接；耗时的回放/渲染在锁外执行。"""
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return wrapped
+
+
 class AccountManager:
     """多账号管理：每个 QQ 用户一个独立游戏账号。"""
 
     def __init__(self):
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self.acct_dir = DATA_DIR / 'accounts'
         self.acct_dir.mkdir(exist_ok=True)
         self.pending_phone = {}     # qq_uid -> 手机号（等验证码中）
@@ -152,11 +163,13 @@ class AccountManager:
         return True
 
     # ── 私聊：登录 ──
+    @synchronized
     def send_code(self, uid, phone):
         request_code(phone)
         self.pending_phone[uid] = phone
         return '验证码已发送，请回复：/验证码 123456'
 
+    @synchronized
     def login_with_code(self, uid, code):
         phone = self.pending_phone.pop(uid, '')
         if not phone:
@@ -165,11 +178,12 @@ class AccountManager:
         self._save_token(uid, resp, phone)
         return '登录成功 ✅\n' + format_profile(self._enter(uid, sid))
 
+    @synchronized
     def get_profile(self, uid):
         """取档案：优先复用活动会话，否则用存着的 accessToken 自动登录。"""
         s = self.sessions.get(uid)
-        if s and s.get('client'):
-            return s['profile'], ''
+        if s and s.get('client') and s['client'].sock:
+            return self._refresh_profile(s), ''
         tok = self._load_token(uid)
         if not tok or not tok.get('accessToken'):
             return None, '还没登录。私聊我发：/登录 你的手机号，再发：/验证码 6位数字。'
@@ -179,6 +193,38 @@ class AccountManager:
             return self._enter(uid, sid), ''
         except Exception as e:
             return None, '登录态过期了，请重新 /登录 一次。（%s）' % e
+
+    def _refresh_profile(self, session):
+        """活动会话每 30 秒刷新一次自己的展示资料，失败时明确返回缓存。"""
+        now = time.monotonic()
+        if now - session.get('refreshed_at', float('-inf')) < 30:
+            return session['profile']
+        session['refreshed_at'] = now
+        profile = dict(session['profile'])
+        try:
+            show = session['client'].get_show_player(int(profile['uid'])).showData
+            if int(show.player_id) != int(profile['uid']):
+                raise ProtocolError('返回的玩家身份不匹配')
+            if show.isShowData:
+                stats = show.statistics
+                total, wins = int(stats.fightCount), int(stats.winFightCount)
+                profile.update(total=total, wins=wins,
+                               winrate=round(100 * wins / total, 1) if total else 0,
+                               heroes=int(stats.roleCardCount), skins=int(stats.skinCount),
+                               praise=int(show.praiseNum))
+            if show.isShowFight:
+                records = list(show.record) or list(show.replayRecord)
+                records.sort(key=lambda r: -int(r.time))
+                profile['recent'] = [
+                    {'time': int(r.time), 'mode_id': int(r.mapType), 'mode': MODE.get(int(r.mapType), '未知模式'),
+                     'hero': HERO.get(int(r.heroId), '未知角色'), 'rank': int(r.rank),
+                     'replay': str(r.replayId)} for r in records[:10]]
+            profile['stale'] = not (show.isShowData and show.isShowFight)
+        except Exception as error:
+            profile['stale'] = True
+            print('[stats] 档案刷新失败，使用缓存:', type(error).__name__)
+        session['profile'] = profile
+        return profile
 
     def _enter(self, uid, sid):
         with self._lock:
@@ -212,7 +258,7 @@ class AccountManager:
                     old['client'].close()
                 except Exception:
                     pass
-            self.sessions[uid] = {'client': c, 'profile': build_profile(s2c)}
+            self.sessions[uid] = {'client': c, 'profile': build_profile(s2c), 'refreshed_at': time.monotonic()}
             prof = self.sessions[uid]['profile']
             self._log_sessions()      # 上线即留痕：journalctl 可查，不落盘
             return prof
@@ -242,11 +288,13 @@ class AccountManager:
         self.bind_file.write_text(json.dumps(self.bindings, ensure_ascii=False),
                                   encoding='utf-8')
 
+    @synchronized
     def make_bind_code(self, member_openid):
         code = '%06d' % random.randint(0, 999999)
         self.pending_bind[code] = (member_openid, time.time())
         return code
 
+    @synchronized
     def bind(self, user_openid, code):
         item = self.pending_bind.pop(code, None)
         if not item:
@@ -258,6 +306,7 @@ class AccountManager:
         self._save_bindings()
         return '绑定成功 ✅ 以后在群里 @我 发 /我的 就能查你的战绩'
 
+    @synchronized
     def resolve_member(self, member_openid):
         return self.bindings.get(member_openid)
 
@@ -307,6 +356,7 @@ class AccountManager:
         except Exception:
             return ''
 
+    @synchronized
     def ensure_service_login(self):
         """把小号挂上。只动小号本人——顶号风险只影响小号，它就是为此准备的。"""
         su = self.service_uid()
@@ -322,6 +372,7 @@ class AccountManager:
         except Exception:
             pass
 
+    @synchronized
     def list_sessions(self):
         out = []
         for uid, s in self.sessions.items():
@@ -338,14 +389,21 @@ class AccountManager:
             while True:
                 time.sleep(10)        # 官方客户端约每 5 秒心跳一次；30 秒太慢会被服务器掐
                 n += 1
-                for uid_, s in list(self.sessions.items()):
+                # 心跳无需等待响应，不占用业务锁，避免慢登录导致其他账号掉线。
+                for uid_, s in self.sessions.copy().items():
                     c = (s or {}).get('client')
                     if c:
                         try:
                             c.heartbeat()
                         except Exception as e:
-                            print('[sessions] 心跳失败，剔除死会话:', uid_, e)
-                            self.sessions.pop(uid_, None)
+                            print('[sessions] 心跳失败，剔除死会话:', type(e).__name__)
+                            c.close()
+                            # 后台线程只标记连接关闭；业务线程在同一把锁下移除。
+                if n % 30 == 0:
+                    with self._lock:
+                        for uid_, s in self.sessions.copy().items():
+                            if not getattr(s.get('client'), 'sock', None):
+                                self.sessions.pop(uid_, None)
                 if n % 30 == 0:          # 约每 5 分钟自愈一次小号登录
                     self.ensure_service_login()
         threading.Thread(target=loop, daemon=True).start()

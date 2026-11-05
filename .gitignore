@@ -5,3 +5,4 @@ cards/
 start.sh
 .env
 .DS_Store
+botpy.log

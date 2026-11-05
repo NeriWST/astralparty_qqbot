@@ -310,6 +310,15 @@ class AccountManager:
     def resolve_member(self, member_openid):
         return self.bindings.get(member_openid)
 
+    @synchronized
+    def unbind_member(self, member_openid):
+        """解除群身份绑定（/解绑）：删除 member->user 映射；user 名下的票保留，可重新绑定找回。"""
+        if member_openid not in self.bindings:
+            return False
+        self.bindings.pop(member_openid, None)
+        self._save_bindings()
+        return True
+
     # ── 战绩历史存档（/我的 卡片"变化"对比用）────────────────
     def load_stats_history(self, uid, limit=20):
         p = DATA_DIR / 'stats_history' / ('%s.json' % uid)

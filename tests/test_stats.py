@@ -107,6 +107,17 @@ class CommandTests(unittest.TestCase):
             self.assertEqual(bot.handle_group('/我的 近期', 'member'), 'ok')
         query.assert_called_once_with('member', 'recent', '', 'pve')
 
+    def test_group_unbind_removes_binding(self):
+        with patch.object(bot, 'mgr') as manager:
+            manager.unbind_member.return_value = True
+            self.assertIn('已解绑', bot.handle_group('/解绑', 'member'))
+        manager.unbind_member.assert_called_once_with('member')
+
+    def test_group_unbind_without_binding(self):
+        with patch.object(bot, 'mgr') as manager:
+            manager.unbind_member.return_value = False
+            self.assertIn('无需解绑', bot.handle_group('/解绑', 'member'))
+
     def test_invalid_selector_provides_usage(self):
         for text in ['/查', '/查 abc', '/查 1234567 角色', '/我的 其他']:
             with self.subTest(text=text):

@@ -30,6 +30,7 @@ HELP_TEXT = (
     '二、绑定群身份（登录后做一次）\n'
     '1. 群里 @我 发：/绑定，会给你一个 6 位绑定码\n'
     '2. 私聊我发：/绑定 123456（10分钟内有效）\n'
+    '· 解除绑定：群里 @我 发 /解绑（/我的 将改用你群身份网页登录的号）\n'
     '\n'
     '三、查战绩\n'
     '· 群里：@我 发 /我的\n'
@@ -227,6 +228,10 @@ def handle_group(text, member_openid):
     if text in ('/绑定', '绑定'):
         code = mgr.make_bind_code(member_openid)
         return '你的绑定码：%s\n私聊我发：/绑定 %s（10分钟内有效）' % (code, code)
+    if text in ('/解绑', '解绑'):
+        if mgr.unbind_member(member_openid):
+            return '已解绑 ✅ 之后 /我的 将使用你本人在本群网页登录（/登录）的账号。'
+        return '你当前没有绑定关系，无需解绑。'
     if text in ('/登录', '登录'):
         if not CARD_BASE:
             return '网页登录未配置（缺 CARD_BASE_URL），请联系管理员。'

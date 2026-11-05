@@ -98,13 +98,14 @@ class CommandTests(unittest.TestCase):
         with patch.object(bot, 'mgr') as manager, patch.object(bot, 'do_query', return_value='ok') as query:
             manager.resolve_member.return_value = None
             self.assertEqual(bot.handle_group('/查 1234567 角色 芬妮', 'member'), 'ok')
-        query.assert_called_once_with('1234567', None, 'hero', '芬妮', 'pve')
+        query.assert_called_once_with('1234567', 'member', 'hero', '芬妮', 'pve')
 
-    def test_unbound_group_self_query_is_rejected(self):
-        with patch.object(bot, 'mgr') as manager, patch.object(bot, 'profile_of') as query:
+    def test_unbound_group_self_query_uses_member_identity(self):
+        # 网页登录模型：未绑定群友用群身份直接查（票存于 member_openid 槽位）
+        with patch.object(bot, 'mgr') as manager, patch.object(bot, 'profile_of', return_value='ok') as query:
             manager.resolve_member.return_value = None
-            self.assertIn('绑定', bot.handle_group('/我的 近期', 'member'))
-        query.assert_not_called()
+            self.assertEqual(bot.handle_group('/我的 近期', 'member'), 'ok')
+        query.assert_called_once_with('member', 'recent', '', 'pve')
 
     def test_invalid_selector_provides_usage(self):
         for text in ['/查', '/查 abc', '/查 1234567 角色', '/我的 其他']:

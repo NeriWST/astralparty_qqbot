@@ -13,6 +13,7 @@ except ImportError:
 
 from bot_core import AccountManager
 import bot_ext
+import bot_weblogin
 from stats_query import StatsQuery
 
 APP_ID = os.environ.get('QQ_APPID', '')
@@ -21,10 +22,10 @@ SECRET = os.environ.get('QQ_SECRET', '')
 HELP_TEXT = (
     '【星趴战绩机器人 · 使用帮助】\n'
     '\n'
-    '一、登录（每人一次，务必私聊操作）\n'
-    '1. 私聊我发：/登录 你的手机号\n'
-    '2. 收到短信验证码后私聊发：/验证码 123456\n'
-    '⚠️ 不要在群里发手机号和验证码！\n'
+    '一、登录（每人一次，群里完成）\n'
+    '1. 群里 @我 发：/登录\n'
+    '2. 点机器人回复的链接，在网页里完成手机号+验证码\n'
+    '⚠️ 不要在群里发手机号！（管理员可私聊 /登录 手机号 → /验证码 码）\n'
     '\n'
     '二、绑定群身份（登录后做一次）\n'
     '1. 群里 @我 发：/绑定，会给你一个 6 位绑定码\n'
@@ -58,7 +59,7 @@ def _start_card_server():
     import functools
     from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
     os.makedirs(CARD_DIR, exist_ok=True)
-    handler = functools.partial(SimpleHTTPRequestHandler, directory=CARD_DIR)
+    handler = bot_weblogin.make_handler(CARD_DIR, mgr)
 
     def run():
         try:
@@ -226,7 +227,14 @@ def handle_group(text, member_openid):
     if text in ('/绑定', '绑定'):
         code = mgr.make_bind_code(member_openid)
         return '你的绑定码：%s\n私聊我发：/绑定 %s（10分钟内有效）' % (code, code)
-    stats = stats_command(text, mgr.resolve_member(member_openid))
+    if text in ('/登录', '登录'):
+        if not CARD_BASE:
+            return '网页登录未配置（缺 CARD_BASE_URL），请联系管理员。'
+        token = bot_weblogin.issue_token(member_openid)
+        return '点下面链接登录你的游戏账号（10分钟有效，勿转发他人）：\n%s/login?t=%s' % (CARD_BASE.rstrip('/'), token)
+    if re.match(r'^/登录\s+\d', text):
+        return '为保护隐私，请勿在群里发手机号！请发 /登录 获取网页登录链接。'
+    stats = stats_command(text, mgr.resolve_member(member_openid) or member_openid)
     if stats is not None:
         return stats
     m = re.match(r'^/回放\s+(\S+)$', text)

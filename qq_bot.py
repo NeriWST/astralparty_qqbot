@@ -20,30 +20,24 @@ APP_ID = os.environ.get('QQ_APPID', '')
 SECRET = os.environ.get('QQ_SECRET', '')
 
 HELP_TEXT = (
-    '【星趴战绩机器人 · 使用帮助】\n'
+    '【星趴战绩机器人】\n'
+    '星引擎 Party（吉星派对）战绩查询。\n'
     '\n'
-    '一、登录（每人一次，群里完成）\n'
-    '1. 群里 @我 发：/登录\n'
-    '2. 点机器人回复的链接，在网页里完成手机号+验证码\n'
-    '⚠️ 不要在群里发手机号！（管理员可私聊 /登录 手机号 → /验证码 码）\n'
+    '登录系（需要你的游戏账号）\n'
+    '· /登录 — 首次使用：群里 @我 发 /登录，点链接在网页完成手机号+验证码\n'
+    '· /我的 — 我的近10场PVE战绩卡片\n'
+    '· /解绑 — 解除当前绑定关系\n'
+    '· /atp help — 更多战绩查询指令\n'
     '\n'
-    '二、绑定群身份（登录后做一次）\n'
-    '1. 群里 @我 发：/绑定，会给你一个 6 位绑定码\n'
-    '2. 私聊我发：/绑定 123456（10分钟内有效）\n'
-    '· 解除绑定：群里 @我 发 /解绑（/我的 将改用你群身份网页登录的号）\n'
+    '查询系（无需登录）\n'
+    '· /查 游戏UID — 查任意玩家公开战绩\n'
+    '· /回放 16位回放号 — 单局四人详细战报\n'
+    '· /手牌 观战码 — PVE 对局实时手牌快照\n'
     '\n'
-    '三、查战绩\n'
-    '· 群里：@我 发 /我的\n'
-    '· 私聊：直接发 /我的\n'
-    '· 查单局详细战报（免登录）：/回放 16位回放号\n'
-    '· 查任意玩家：/查 游戏UID\n'
-    '· 默认 PVE：/atp me 或 /atp UID\n'
-    '· 今日 PVE：/atp me recent（北京时间）\n'
-    '· 更多查询指令：/atp help\n'
-    '· 角色分析：/我的 角色 帕露南 或 /查 UID 角色 帕露南\n'
-    '· 看队友实时手牌（仅PVE）：/手牌 观战码\n'    '\n'
-    '⚠️ 重要提醒：机器人登录的是你的游戏账号，同账号同时只能\n'
-    '一处在线——查战绩和玩游戏请错开，否则会把游戏顶下线！'
+    '⚠️⚠️ 顶号警告 ⚠️⚠️\n'
+    '/我的 会登录你的游戏账号——查询瞬间\n'
+    '如果你正在游戏里，会被当场踢下线！\n'
+    '千万不要边玩边查，打完这局再查！'
 )
 
 mgr = AccountManager()
@@ -102,8 +96,10 @@ def save_card(png: bytes) -> str:
     return CARD_BASE.rstrip('/') + '/' + name
 
 
-def profile_of(qq_uid, view='overview', hero='', battle_type='pve'):
-    result = StatsQuery(mgr, images=bool(CARD_BASE)).mine(qq_uid, view, hero, battle_type)
+def profile_of(qq_uid, view='overview', hero='', battle_type='pve', usage_card=False):
+    query = StatsQuery(mgr, images=bool(CARD_BASE))
+    query.usage_card = usage_card   # 中文 /我的 专用：角色使用排行卡；/atp me 保持原卡
+    result = query.mine(qq_uid, view, hero, battle_type)
     return Reply(result.text, result.image)
 
 
@@ -166,7 +162,8 @@ def stats_command(text, requester):
     if mine:
         if not requester:
             return '还没绑定。先在群里 /绑定，然后私聊完成绑定。'
-        return profile_of(requester, view, hero, battle_type)
+        return profile_of(requester, view, hero, battle_type,
+                          usage_card=(tokens[0] in ('/我的', '我的') and view == 'overview'))
     return do_query(target, requester, view, hero, battle_type)
 
 

@@ -45,8 +45,12 @@ class StatsQuery:
         image = None
         if self.images:
             try:
-                from bot_viz import render_report_png
-                image = render_report_png(report)
+                if getattr(self, 'usage_card', False) and profile.get("usage"):
+                    from bot_usage import render_usage_card_png
+                    image = render_usage_card_png(profile)
+                else:
+                    from bot_viz import render_report_png
+                    image = render_report_png(report)
             except Exception as error:
                 print('[stats] 图片生成失败，回退文字:', type(error).__name__)
         return QueryResult(text, image)

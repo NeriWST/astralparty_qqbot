@@ -313,5 +313,14 @@
   "lv": 0,
   "breakthrough": false,
   "inRoleCard": true
+ },
+ {
+  "pos": 36,
+  "id": 130,
+  "name": "苍鲤",
+  "fightCount": "—",
+  "lv": null,
+  "breakthrough": null,
+  "inRoleCard": false
  }
 ]

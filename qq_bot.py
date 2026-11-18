@@ -331,6 +331,15 @@ class MyClient(qqbot.Client):
         await self._reply(message, uid, result)
 
 
+# ===== 可拔插插件挂载（各自独立，互不影响）=====
+for _plug in ("review_glue", "replay_glue"):
+    try:
+        __import__(_plug).mount()
+        print('[plugin]', _plug, '已挂载')
+    except Exception as e:
+        print('[plugin]', _plug, '加载失败（不影响其他）:', e)
+# ===== 插件挂载结束 =====
+
 if __name__ == '__main__':
     if not APP_ID or not SECRET:
         raise SystemExit('请设置 QQ_APPID 和 QQ_SECRET')

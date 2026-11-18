@@ -6,3 +6,6 @@ start.sh
 .env
 .DS_Store
 botpy.log
+
+botpy.log*
+*.bak

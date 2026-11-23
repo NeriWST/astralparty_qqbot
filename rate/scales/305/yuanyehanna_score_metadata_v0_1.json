@@ -1,0 +1,33 @@
+{
+  "scale_id": "yuanyehanna_82017_d3_v0.1",
+  "version": "v0.1",
+  "hero_id": 305,
+  "hero_name": "远野汉娜",
+  "role_type": "SUP",
+  "candidate": "SUP3_global_heavy",
+  "map_id": 82017,
+  "difficulty": 3,
+  "reference_rows": 3111,
+  "reference_unique_uids": 2036,
+  "sample_confidence": "中",
+  "status": "frozen_pending_independent_selftest",
+  "rounding_decimals": 10,
+  "score_direction": "higher_is_better",
+  "formula": {
+    "p_transfer": 0.4,
+    "p_transfer7": 0.2,
+    "p_injury": 0.1,
+    "survival_cap": 0.3
+  },
+  "survival_cap": "clip(1 - died / 3, 0, 1)",
+  "required_raw_fields": [
+    "rounds",
+    "transfer",
+    "transfer_1_7",
+    "move",
+    "inj",
+    "died"
+  ],
+  "reference_file": "yuanyehanna_score_reference_v0_1.npz",
+  "percentile_interpretation": "本局表现超过冻结参考样本中相应比例的同角色、同地图、同难度可比对局"
+}

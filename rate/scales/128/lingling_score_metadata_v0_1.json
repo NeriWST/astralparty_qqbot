@@ -1,0 +1,42 @@
+{
+  "scale_id": "lingling_82017_d3_v0.1",
+  "version": "v0.1",
+  "hero_id": 128,
+  "hero_name": "玲玲",
+  "role_type": "兼修",
+  "candidate": "H4_split_transfer",
+  "map_id": 82017,
+  "difficulty": 3,
+  "reference_rows": 784,
+  "reference_unique_uids": 520,
+  "sample_confidence": "低",
+  "usage_label": "实验性",
+  "usage_warning": "低样本参考分布，结果仅供实验性使用，后续需用新增数据复核。",
+  "status": "independent_selftest_passed",
+  "rounding_decimals": 10,
+  "score_direction": "higher_is_better",
+  "formula": {
+    "p_global": 0.2,
+    "p_mid": 0.2,
+    "p_transfer": 0.1,
+    "p_transfer7": 0.1,
+    "p_injury": 0.1,
+    "survival_cap": 0.3
+  },
+  "survival_cap": "clip(1 - died / 3, 0, 1)",
+  "required_raw_fields": [
+    "rounds",
+    "dmg",
+    "dmg_1_8",
+    "transfer",
+    "transfer_1_7",
+    "inj",
+    "died"
+  ],
+  "reference_file": "lingling_score_reference_v0_1.npz",
+  "percentile_interpretation": "本局表现超过冻结参考样本中相应比例的同角色、同地图、同难度可比对局",
+  "selftest_rows": 12,
+  "selftest_tolerance": 1e-12,
+  "selftest_raw_score_max_error": 5.551115123125783e-17,
+  "selftest_percentile_max_error": 3.552713678800501e-15
+}

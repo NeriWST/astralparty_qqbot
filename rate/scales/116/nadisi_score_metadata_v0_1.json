@@ -1,0 +1,40 @@
+{
+  "scale_id": "nadisi_82017_d3_v0.1",
+  "version": "v0.1",
+  "hero_id": 116,
+  "hero_name": "娜蒂斯",
+  "role_type": "兼修",
+  "candidate": "H3_transfer_30",
+  "map_id": 82017,
+  "difficulty": 3,
+  "reference_rows": 801,
+  "reference_unique_uids": 551,
+  "sample_confidence": "低",
+  "usage_label": "实验性",
+  "usage_warning": "低样本参考分布，结果仅供实验性使用，后续需用新增数据复核。",
+  "status": "independent_selftest_passed",
+  "rounding_decimals": 10,
+  "score_direction": "higher_is_better",
+  "formula": {
+    "p_global": 0.15,
+    "p_mid": 0.15,
+    "p_transfer": 0.3,
+    "p_injury": 0.1,
+    "survival_cap": 0.3
+  },
+  "survival_cap": "clip(1 - died / 3, 0, 1)",
+  "required_raw_fields": [
+    "rounds",
+    "dmg",
+    "dmg_1_8",
+    "transfer",
+    "inj",
+    "died"
+  ],
+  "reference_file": "nadisi_score_reference_v0_1.npz",
+  "percentile_interpretation": "本局表现超过冻结参考样本中相应比例的同角色、同地图、同难度可比对局",
+  "selftest_rows": 12,
+  "selftest_tolerance": 1e-12,
+  "selftest_raw_score_max_error": 1.3877787807814457e-17,
+  "selftest_percentile_max_error": 3.552713678800501e-15
+}

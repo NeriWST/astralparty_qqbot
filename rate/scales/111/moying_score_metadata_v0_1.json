@@ -1,0 +1,38 @@
+{
+  "scale_id": "moying_82017_d3_v0.1",
+  "version": "v0.1",
+  "hero_id": 111,
+  "hero_name": "墨影",
+  "role_type": "C",
+  "candidate": "C2_mid_heavy",
+  "map_id": 82017,
+  "difficulty": 3,
+  "reference_rows": 249,
+  "reference_unique_uids": 191,
+  "sample_confidence": "低",
+  "usage_label": "实验性",
+  "usage_warning": "低样本参考分布，结果仅供实验性使用，后续需用新增数据复核。",
+  "status": "independent_selftest_passed",
+  "rounding_decimals": 10,
+  "score_direction": "higher_is_better",
+  "formula": {
+    "p_global": 0.2,
+    "p_mid": 0.4,
+    "p_injury": 0.1,
+    "survival_cap": 0.3
+  },
+  "survival_cap": "clip(1 - died / 3, 0, 1)",
+  "required_raw_fields": [
+    "rounds",
+    "dmg",
+    "dmg_1_8",
+    "inj",
+    "died"
+  ],
+  "reference_file": "moying_score_reference_v0_1.npz",
+  "percentile_interpretation": "本局表现超过冻结参考样本中相应比例的同角色、同地图、同难度可比对局",
+  "selftest_rows": 12,
+  "selftest_tolerance": 1e-12,
+  "selftest_raw_score_max_error": 1.1102230246251565e-16,
+  "selftest_percentile_max_error": 1.4210854715202004e-14
+}

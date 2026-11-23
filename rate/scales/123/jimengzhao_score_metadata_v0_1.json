@@ -1,0 +1,38 @@
+{
+  "scale_id": "jimengzhao_82017_d3_v0.1",
+  "version": "v0.1",
+  "hero_id": 123,
+  "hero_name": "姬梦朝",
+  "role_type": "SUP",
+  "candidate": "SUP4_move_10",
+  "map_id": 82017,
+  "difficulty": 3,
+  "reference_rows": 9605,
+  "reference_unique_uids": 6355,
+  "sample_confidence": "高",
+  "status": "independent_selftest_passed",
+  "rounding_decimals": 10,
+  "score_direction": "higher_is_better",
+  "formula": {
+    "p_transfer": 0.25,
+    "p_transfer7": 0.25,
+    "p_move": 0.1,
+    "p_injury": 0.1,
+    "survival_cap": 0.3
+  },
+  "survival_cap": "clip(1 - died / 3, 0, 1)",
+  "required_raw_fields": [
+    "rounds",
+    "transfer",
+    "transfer_1_7",
+    "move",
+    "inj",
+    "died"
+  ],
+  "reference_file": "jimengzhao_score_reference_v0_1.npz",
+  "percentile_interpretation": "本局表现超过冻结参考样本中相应比例的同角色、同地图、同难度可比对局",
+  "selftest_rows": 12,
+  "selftest_tolerance": 1e-12,
+  "selftest_raw_score_max_error": 1.1102230246251565e-16,
+  "selftest_percentile_max_error": 3.552713678800501e-15
+}

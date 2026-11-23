@@ -1,0 +1,31 @@
+{
+  "scale_id": "zhao_82017_d3_v0.1",
+  "version": "v0.1",
+  "hero_id": 124,
+  "hero_name": "照",
+  "role_type": "HYBRID",
+  "map_id": 82017,
+  "difficulty": 3,
+  "reference_rows": 9457,
+  "reference_unique_uids": 5851,
+  "rounding_decimals": 10,
+  "score_direction": "higher_is_better",
+  "formula": {
+    "p_global": 0.2,
+    "p_mid": 0.2,
+    "p_transfer": 0.2,
+    "p_injury": 0.1,
+    "survival_cap": 0.3
+  },
+  "survival_cap": "clip(1 - died / 3, 0, 1)",
+  "required_raw_fields": [
+    "rounds",
+    "dmg",
+    "dmg_1_8",
+    "transfer",
+    "inj",
+    "died"
+  ],
+  "reference_file": "zhao_score_reference_v0_1.npz",
+  "percentile_interpretation": "本局表现超过冻结参考样本中相应比例的同角色、同地图、同难度可比对局"
+}

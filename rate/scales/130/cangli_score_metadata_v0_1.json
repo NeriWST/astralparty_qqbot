@@ -1,0 +1,32 @@
+{
+  "scale_id": "cangli_82017_d3_v0.1",
+  "version": "v0.1",
+  "hero_id": 130,
+  "hero_name": "苍鲤",
+  "role_type": "C",
+  "candidate": "C1_balanced",
+  "map_id": 82017,
+  "difficulty": 3,
+  "reference_rows": 24863,
+  "reference_unique_uids": 11228,
+  "sample_confidence": "高",
+  "status": "independent_selftest_passed",
+  "rounding_decimals": 10,
+  "score_direction": "higher_is_better",
+  "formula": {
+    "p_global": 0.3,
+    "p_mid": 0.3,
+    "p_injury": 0.1,
+    "survival_cap": 0.3
+  },
+  "survival_cap": "clip(1 - died / 3, 0, 1)",
+  "required_raw_fields": [
+    "rounds",
+    "dmg",
+    "dmg_1_8",
+    "inj",
+    "died"
+  ],
+  "reference_file": "cangli_score_reference_v0_1.npz",
+  "percentile_interpretation": "本局表现超过冻结参考样本中相应比例的同角色、同地图、同难度可比对局"
+}

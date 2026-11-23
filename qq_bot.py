@@ -32,6 +32,7 @@ HELP_TEXT = (
     '查询系（无需登录）\n'
     '· /查 游戏UID — 查任意玩家公开战绩\n'
     '· /回放 16位回放号 — 单局四人详细战报\n'
+    '· /评分 16位回放号 — 四人表现评分（试运营）\n'
     '· /手牌 观战码 — PVE 对局实时手牌快照\n'
     '\n'
     '⚠️⚠️ 顶号警告 ⚠️⚠️\n'
@@ -332,7 +333,7 @@ class MyClient(qqbot.Client):
 
 
 # ===== 可拔插插件挂载（各自独立，互不影响）=====
-for _plug in ("review_glue", "replay_glue"):
+for _plug in ("review_glue", "replay_glue", "rate_glue"):
     try:
         __import__(_plug).mount()
         print('[plugin]', _plug, '已挂载')
